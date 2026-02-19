@@ -1,8 +1,8 @@
 trigger: none
 
 parameters:
-  - name: repoOption
-    displayName: "Selecciona el repositorio"
+  - name: repoTemplate
+    displayName: "Selecciona el repositorio template"
     type: string
     default: springboot
     values:
@@ -10,25 +10,116 @@ parameters:
       - react
       - ejemplo-repo
 
+  - name: newRepoName
+    displayName: "Nombre del nuevo repositorio"
+    type: string
+    default: "mi-nuevo-repo"
+
+  - name: repoVisibility
+    displayName: "Visibilidad del repositorio"
+    type: string
+    default: private
+    values:
+      - public
+      - private
+
 variables:
-  springbootRepo: "https://github.com/Adrian-Bastidas/AqrGSprinboot"
-  reactRepo: "https://github.com/Adrian-Bastidas/ArqGReact"
-  ejemploRepo: "https://github.com/usuario/ejemplo-repo"
+  - group: github-secrets
+  - name: springbootRepo
+    value: "Adrian-Bastidas/AqrGSprinboot"
+  - name: reactRepo
+    value: "Adrian-Bastidas/ArqGReact"
+  - name: ejemploRepo
+    value: "usuario/ejemplo-repo"
+  - name: githubUser
+    value: "Adrian-Bastidas" # <-- cambia esto por tu usuario u organización
 
 pool:
   name: Default
 
 steps:
+  # 1. Determinar qué repo template usar
   - powershell: |
-      Write-Host "Opción seleccionada: ${{ parameters.repoOption }}"
+      $template = "${{ parameters.repoTemplate }}"
 
-      if ("${{ parameters.repoOption }}" -eq "springboot") {
-          Write-Host "Repositorio: $(springbootRepo)"
+      if ($template -eq "springboot") {
+          Write-Host "##vso[task.setvariable variable=templateRepo]$(springbootRepo)"
       }
-      elseif ("${{ parameters.repoOption }}" -eq "react") {
-          Write-Host "Repositorio: $(reactRepo)"
+      elseif ($template -eq "react") {
+          Write-Host "##vso[task.setvariable variable=templateRepo]$(reactRepo)"
       }
-      elseif ("${{ parameters.repoOption }}" -eq "ejemplo-repo") {
-          Write-Host "Repositorio: $(ejemploRepo)"
+      elseif ($template -eq "ejemplo-repo") {
+          Write-Host "##vso[task.setvariable variable=templateRepo]$(ejemploRepo)"
       }
-    displayName: "Imprimir repositorio seleccionado"
+
+      Write-Host "Template seleccionado: $template"
+    displayName: "Seleccionar template"
+
+  # 2. Crear el nuevo repositorio en GitHub vía API
+  - powershell: |
+      $headers = @{
+          Authorization = "Bearer $(GITHUB_TOKEN)"
+          Accept        = "application/vnd.github+json"
+      }
+
+      $isPrivate = "${{ parameters.repoVisibility }}" -eq "private"
+
+      $body = @{
+          name    = "${{ parameters.newRepoName }}"
+          private = $isPrivate
+          auto_init = $true   # crea rama main automáticamente
+      } | ConvertTo-Json
+
+      Write-Host "Creando repositorio: ${{ parameters.newRepoName }} (${{ parameters.repoVisibility }})"
+
+      $response = Invoke-RestMethod `
+          -Uri "https://api.github.com/user/repos" `
+          -Method POST `
+          -Headers $headers `
+          -Body $body `
+          -ContentType "application/json"
+
+      Write-Host "Repositorio creado: $($response.html_url)"
+      Write-Host "##vso[task.setvariable variable=newRepoUrl]$($response.clone_url)"
+    displayName: "Crear nuevo repositorio en GitHub"
+
+  # 3. Clonar el template, copiar contenido y subir al nuevo repo
+  - powershell: |
+      $templateRepo = "$(templateRepo)"
+      $newRepoUrl   = "$(newRepoUrl)"
+      $token        = "$(GITHUB_TOKEN)"
+      $newRepoName  = "${{ parameters.newRepoName }}"
+
+      # Construir URL con token para autenticar el push
+      $authenticatedUrl = $newRepoUrl -replace "https://", "https://$token@"
+
+      # Clonar el template
+      Write-Host "Clonando template: $templateRepo"
+      git clone "https://$token@github.com/$templateRepo.git" template-repo
+      Set-Location template-repo
+
+      # Apuntar el remote al nuevo repo
+      git remote set-url origin $authenticatedUrl
+
+      # Asegurarse de estar en main y hacer push
+      git checkout -B main
+      git push origin main --force
+
+      # Crear rama develop desde main
+      git checkout -b develop
+      git push origin develop
+
+      Write-Host "¡Listo! Ramas 'main' y 'develop' creadas en $newRepoUrl"
+    displayName: "Copiar template y crear ramas main/develop"
+
+  # 4. Resumen final
+  - powershell: |
+      Write-Host "============================================"
+      Write-Host "✅ Repositorio creado exitosamente"
+      Write-Host "📦 Template usado : ${{ parameters.repoTemplate }}"
+      Write-Host "📁 Nuevo repo     : ${{ parameters.newRepoName }}"
+      Write-Host "🔒 Visibilidad    : ${{ parameters.repoVisibility }}"
+      Write-Host "🔗 URL            : $(newRepoUrl)"
+      Write-Host "🌿 Ramas creadas  : main, develop"
+      Write-Host "============================================"
+    displayName: "Resumen"
