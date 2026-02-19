@@ -33,75 +33,73 @@ variables:
     value: "usuario/ejemplo-repo"
   - name: githubUser
     value: "Adrian-Bastidas"
+  # Flags de rollback (se activan conforme avanza el pipeline)
+  - name: repoCreado
+    value: "false"
+  - name: codigoSubido
+    value: "false"
+  - name: mainProtegida
+    value: "false"
 
 pool:
   name: Default
 
 steps:
-  # 1. Validar nombre del repositorio
+  # ============================================================
+  # 1. VALIDAR NOMBRE
+  # ============================================================
   - powershell: |
+      $ErrorActionPreference = "Stop"
       $repoName = "${{ parameters.newRepoName }}"
 
       Write-Host "Validando nombre: '$repoName'"
 
-      # Regla 1: no puede estar vacío
       if ([string]::IsNullOrWhiteSpace($repoName)) {
-          Write-Host "##vso[task.logissue type=error]El nombre del repositorio no puede estar vacío."
-          exit 1
+          throw "El nombre del repositorio no puede estar vacío."
       }
 
-      # Regla 2: longitud máxima de 100 caracteres (límite de GitHub)
       if ($repoName.Length -gt 100) {
-          Write-Host "##vso[task.logissue type=error]El nombre excede los 100 caracteres permitidos por GitHub. Longitud actual: $($repoName.Length)"
-          exit 1
+          throw "El nombre excede los 100 caracteres permitidos por GitHub. Longitud actual: $($repoName.Length)"
       }
 
-      # Regla 3: solo permite letras, números, guiones y guiones bajos
       if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') {
-          Write-Host "##vso[task.logissue type=error]El nombre '$repoName' contiene caracteres no permitidos. Solo se permiten: letras (a-z, A-Z), números (0-9), guiones (-), guiones bajos (_) y puntos (.)"
-          exit 1
+          throw "El nombre '$repoName' contiene caracteres no permitidos. Solo se permiten: letras (a-z, A-Z), números (0-9), guiones (-), guiones bajos (_) y puntos (.)"
       }
 
-      # Regla 4: no puede empezar ni terminar con punto
       if ($repoName.StartsWith('.') -or $repoName.EndsWith('.')) {
-          Write-Host "##vso[task.logissue type=error]El nombre no puede empezar ni terminar con un punto (.)"
-          exit 1
+          throw "El nombre no puede empezar ni terminar con un punto (.)"
       }
 
-      # Regla 5: no puede empezar ni terminar con guión
       if ($repoName.StartsWith('-') -or $repoName.EndsWith('-')) {
-          Write-Host "##vso[task.logissue type=error]El nombre no puede empezar ni terminar con un guión (-)."
-          exit 1
+          throw "El nombre no puede empezar ni terminar con un guión (-)"
       }
 
-      # Regla 6: no puede tener espacios
       if ($repoName -match '\s') {
-          Write-Host "##vso[task.logissue type=error]El nombre no puede contener espacios. Usa guiones (-) o guiones bajos (_) en su lugar."
-          exit 1
+          throw "El nombre no puede contener espacios. Usa guiones (-) o guiones bajos (_) en su lugar."
       }
 
-      # Regla 7: no puede ser un nombre reservado por GitHub/Windows
       $reservedNames = @(
           ".", "..", "CON", "PRN", "AUX", "NUL",
           "COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9",
           "LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9"
       )
       if ($reservedNames -contains $repoName.ToUpper()) {
-          Write-Host "##vso[task.logissue type=error]El nombre '$repoName' es un nombre reservado y no puede usarse."
-          exit 1
+          throw "El nombre '$repoName' es un nombre reservado y no puede usarse."
       }
 
-      # Regla 8: no puede ser solo puntos
       if ($repoName -match '^\.+$') {
-          Write-Host "##vso[task.logissue type=error]El nombre no puede estar compuesto únicamente por puntos."
-          exit 1
+          throw "El nombre no puede estar compuesto únicamente por puntos."
       }
 
-      Write-Host "Nombre '$repoName' válido. Longitud: $($repoName.Length) caracteres."
+      Write-Host "✅ Nombre '$repoName' válido."
     displayName: "Validar nombre del repositorio"
+    # Si este paso falla, no hay nada que revertir todavía
 
-  # 2. Determinar qué repo template usar
+  # ============================================================
+  # 2. SELECCIONAR TEMPLATE
+  # ============================================================
   - powershell: |
+      $ErrorActionPreference = "Stop"
       $template = "${{ parameters.repoTemplate }}"
 
       if ($template -eq "springboot") {
@@ -113,12 +111,19 @@ steps:
       elseif ($template -eq "ejemplo-repo") {
           Write-Host "##vso[task.setvariable variable=templateRepo]$(ejemploRepo)"
       }
+      else {
+          throw "Template '$template' no reconocido."
+      }
 
-      Write-Host "Template seleccionado: $template"
+      Write-Host "✅ Template seleccionado: $template"
     displayName: "Seleccionar template"
 
-  # 3. Crear el nuevo repositorio en GitHub vía API
+  # ============================================================
+  # 3. CREAR REPOSITORIO EN GITHUB
+  # ============================================================
   - powershell: |
+      $ErrorActionPreference = "Stop"
+
       $headers = @{
           Authorization = "Bearer $(GITHUB_TOKEN)"
           Accept        = "application/vnd.github+json"
@@ -134,43 +139,73 @@ steps:
 
       Write-Host "Creando repositorio: ${{ parameters.newRepoName }} (${{ parameters.repoVisibility }})"
 
-      $response = Invoke-RestMethod `
-          -Uri "https://api.github.com/user/repos" `
-          -Method POST `
-          -Headers $headers `
-          -Body $body `
-          -ContentType "application/json"
+      try {
+          $response = Invoke-RestMethod `
+              -Uri "https://api.github.com/user/repos" `
+              -Method POST `
+              -Headers $headers `
+              -Body $body `
+              -ContentType "application/json"
 
-      Write-Host "Repositorio creado: $($response.html_url)"
-      Write-Host "##vso[task.setvariable variable=newRepoUrl]$($response.clone_url)"
-      Write-Host "##vso[task.setvariable variable=newRepoFullName]$($response.full_name)"
-    displayName: "Crear nuevo repositorio en GitHub"
+          Write-Host "✅ Repositorio creado: $($response.html_url)"
+          Write-Host "##vso[task.setvariable variable=newRepoUrl]$($response.clone_url)"
+          Write-Host "##vso[task.setvariable variable=newRepoFullName]$($response.full_name)"
+          Write-Host "##vso[task.setvariable variable=repoCreado]true"
+      }
+      catch {
+          $errorDetail = $_.Exception.Message
+          throw "No se pudo crear el repositorio en GitHub. Detalle: $errorDetail"
+      }
+    displayName: "Crear repositorio en GitHub"
 
-  # 4. Clonar el template, copiar contenido y subir al nuevo repo
+  # ============================================================
+  # 4. CLONAR TEMPLATE Y SUBIR CÓDIGO
+  # ============================================================
   - powershell: |
+      $ErrorActionPreference = "Stop"
+
       $templateRepo = "$(templateRepo)"
       $newRepoUrl   = "$(newRepoUrl)"
       $token        = "$(GITHUB_TOKEN)"
-
       $authenticatedUrl = $newRepoUrl -replace "https://", "https://$token@"
 
-      Write-Host "Clonando template: $templateRepo"
-      git clone "https://$token@github.com/$templateRepo.git" template-repo
-      Set-Location template-repo
+      try {
+          Write-Host "Clonando template: $templateRepo"
+          git clone "https://$token@github.com/$templateRepo.git" template-repo
+          if ($LASTEXITCODE -ne 0) { throw "Error al clonar el repositorio template." }
 
-      git remote set-url origin $authenticatedUrl
+          Set-Location template-repo
 
-      git checkout -B main
-      git push origin main --force
+          git remote set-url origin $authenticatedUrl
+          if ($LASTEXITCODE -ne 0) { throw "Error al configurar el remote origin." }
 
-      git checkout -b develop
-      git push origin develop
+          git checkout -B main
+          if ($LASTEXITCODE -ne 0) { throw "Error al crear rama main." }
 
-      Write-Host "Ramas 'main' y 'develop' creadas correctamente"
-    displayName: "Copiar template y crear ramas main/develop"
+          git push origin main --force
+          if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de main." }
 
-  # 5. Proteger rama main
+          git checkout -b develop
+          if ($LASTEXITCODE -ne 0) { throw "Error al crear rama develop." }
+
+          git push origin develop
+          if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de develop." }
+
+          Write-Host "##vso[task.setvariable variable=codigoSubido]true"
+          Write-Host "✅ Ramas 'main' y 'develop' creadas correctamente"
+      }
+      catch {
+          $errorDetail = $_.Exception.Message
+          throw "Fallo al subir el código al nuevo repositorio. Detalle: $errorDetail"
+      }
+    displayName: "Copiar template y crear ramas"
+
+  # ============================================================
+  # 5. PROTEGER RAMA MAIN
+  # ============================================================
   - powershell: |
+      $ErrorActionPreference = "Stop"
+
       $headers = @{
           Authorization = "Bearer $(GITHUB_TOKEN)"
           Accept        = "application/vnd.github+json"
@@ -190,20 +225,31 @@ steps:
           block_creations        = $false
       } | ConvertTo-Json -Depth 5
 
-      Write-Host "Aplicando protección a rama: main"
+      try {
+          Write-Host "Aplicando protección a rama: main"
 
-      Invoke-RestMethod `
-          -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/main/protection" `
-          -Method PUT `
-          -Headers $headers `
-          -Body $body `
-          -ContentType "application/json"
+          Invoke-RestMethod `
+              -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/main/protection" `
+              -Method PUT `
+              -Headers $headers `
+              -Body $body `
+              -ContentType "application/json"
 
-      Write-Host "Rama main protegida"
+          Write-Host "##vso[task.setvariable variable=mainProtegida]true"
+          Write-Host "✅ Rama main protegida"
+      }
+      catch {
+          $errorDetail = $_.Exception.Message
+          throw "No se pudo proteger la rama main. Detalle: $errorDetail"
+      }
     displayName: "Proteger rama main"
 
-  # 6. Proteger rama develop
+  # ============================================================
+  # 6. PROTEGER RAMA DEVELOP
+  # ============================================================
   - powershell: |
+      $ErrorActionPreference = "Stop"
+
       $headers = @{
           Authorization = "Bearer $(GITHUB_TOKEN)"
           Accept        = "application/vnd.github+json"
@@ -223,32 +269,86 @@ steps:
           block_creations        = $false
       } | ConvertTo-Json -Depth 5
 
-      Write-Host "Aplicando protección a rama: develop"
+      try {
+          Write-Host "Aplicando protección a rama: develop"
 
-      Invoke-RestMethod `
-          -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/develop/protection" `
-          -Method PUT `
-          -Headers $headers `
-          -Body $body `
-          -ContentType "application/json"
+          Invoke-RestMethod `
+              -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/develop/protection" `
+              -Method PUT `
+              -Headers $headers `
+              -Body $body `
+              -ContentType "application/json"
 
-      Write-Host "Rama develop protegida"
+          Write-Host "✅ Rama develop protegida"
+      }
+      catch {
+          $errorDetail = $_.Exception.Message
+          throw "No se pudo proteger la rama develop. Detalle: $errorDetail"
+      }
     displayName: "Proteger rama develop"
 
-  # 7. Resumen final
+  # ============================================================
+  # ROLLBACK — Solo se ejecuta si algo falló
+  # ============================================================
+  - powershell: |
+      $ErrorActionPreference = "Stop"
+
+      Write-Host "##vso[task.logissue type=error]❌ El pipeline falló. Iniciando rollback..."
+
+      $headers = @{
+          Authorization = "Bearer $(GITHUB_TOKEN)"
+          Accept        = "application/vnd.github+json"
+      }
+
+      # Solo eliminar el repo si llegó a crearse
+      if ("$(repoCreado)" -eq "true") {
+          Write-Host "🗑️  Eliminando repositorio: $(newRepoFullName)"
+          try {
+              Invoke-RestMethod `
+                  -Uri "https://api.github.com/repos/$(newRepoFullName)" `
+                  -Method DELETE `
+                  -Headers $headers
+
+              Write-Host "✅ Repositorio eliminado correctamente."
+          }
+          catch {
+              Write-Host "##vso[task.logissue type=warning]⚠️ No se pudo eliminar el repositorio automáticamente."
+              Write-Host "##vso[task.logissue type=warning]   Elimínalo manualmente en: https://github.com/$(newRepoFullName)"
+          }
+      }
+      else {
+          Write-Host "ℹ️  El repositorio no llegó a crearse. No hay nada que revertir en GitHub."
+      }
+
+      # Limpiar carpeta temporal del agente si existe
+      $tempFolder = "$(Agent.BuildDirectory)\template-repo"
+      if (Test-Path $tempFolder) {
+          Remove-Item -Recurse -Force $tempFolder
+          Write-Host "🧹 Carpeta temporal del agente limpiada."
+      }
+
+      Write-Host "##vso[task.logissue type=error]Pipeline detenido. Revisa los errores arriba para más detalles."
+      exit 1
+    displayName: "ROLLBACK — Revertir cambios"
+    condition: failed() # <-- Este paso SOLO corre si algún paso anterior falló
+
+  # ============================================================
+  # RESUMEN FINAL — Solo se ejecuta si todo fue exitoso
+  # ============================================================
   - powershell: |
       Write-Host "============================================"
-      Write-Host "Repositorio creado exitosamente"
-      Write-Host "Template usado  : ${{ parameters.repoTemplate }}"
-      Write-Host "Nuevo repo      : ${{ parameters.newRepoName }}"
-      Write-Host "Visibilidad     : ${{ parameters.repoVisibility }}"
-      Write-Host "URL             : $(newRepoUrl)"
-      Write-Host "Ramas creadas   : main, develop"
-      Write-Host "Protecciones   :"
+      Write-Host "✅ Repositorio creado exitosamente"
+      Write-Host "📦 Template usado  : ${{ parameters.repoTemplate }}"
+      Write-Host "📁 Nuevo repo      : ${{ parameters.newRepoName }}"
+      Write-Host "🔒 Visibilidad     : ${{ parameters.repoVisibility }}"
+      Write-Host "🔗 URL             : $(newRepoUrl)"
+      Write-Host "🌿 Ramas creadas   : main, develop"
+      Write-Host "🛡️  Protecciones   :"
       Write-Host "   - Push directo bloqueado en main y develop"
       Write-Host "   - Force push bloqueado"
       Write-Host "   - Merge solo por Pull Request con 1 aprobación"
       Write-Host "   - Aprobaciones se invalidan si hay nuevos commits"
       Write-Host "   - Reglas aplican también a administradores"
       Write-Host "============================================"
-    displayName: "Resumen"
+    displayName: "Resumen exitoso"
+    condition: succeeded() # <-- Este paso SOLO corre si todo salió bien
