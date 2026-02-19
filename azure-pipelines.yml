@@ -12,21 +12,23 @@ parameters:
 
 variables:
   springbootRepo: "https://github.com/Adrian-Bastidas/AqrGSprinboot"
-  react: "https://github.com/Adrian-Bastidas/ArqGReact"
-  ejemplo-repoRepo: "https://github.com/usuario/ejemplo-repo"
+  reactRepo: "https://github.com/Adrian-Bastidas/ArqGReact"
+  ejemploRepo: "https://github.com/usuario/ejemplo-repo"
 
 pool:
   name: Default
 
 steps:
-  - script: |
-      echo "Opción seleccionada: ${{ parameters.repoOption }}"
+  - pwsh: |
+      Write-Host "Opción seleccionada: ${{ parameters.repoOption }}"
 
-      if [ "${{ parameters.repoOption }}" = "springboot" ]; then
-        echo "Repositorio: $(springbootRepo)"
-      elif [ "${{ parameters.repoOption }}" = "otro-repo" ]; then
-        echo "Repositorio: $(react)"
-      elif [ "${{ parameters.repoOption }}" = "ejemplo-repo" ]; then
-        echo "Repositorio: $(ejemplo-repoRepo)"
-      fi
+      if ("${{ parameters.repoOption }}" -eq "springboot") {
+          Write-Host "Repositorio: $(springbootRepo)"
+      }
+      elseif ("${{ parameters.repoOption }}" -eq "react") {
+          Write-Host "Repositorio: $(reactRepo)"
+      }
+      elseif ("${{ parameters.repoOption }}" -eq "ejemplo-repo") {
+          Write-Host "Repositorio: $(ejemploRepo)"
+      }
     displayName: "Imprimir repositorio seleccionado"
