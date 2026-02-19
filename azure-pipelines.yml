@@ -1,19 +1,32 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
+trigger: none
 
-trigger:
-- main
+parameters:
+  - name: repoOption
+    displayName: "Selecciona el repositorio"
+    type: string
+    default: springboot
+    values:
+      - springboot
+      - react
+      - ejemplo-repo
+
+variables:
+  springbootRepo: "https://github.com/Adrian-Bastidas/AqrGSprinboot"
+  react: "https://github.com/Adrian-Bastidas/ArqGReact"
+  ejemplo-repoRepo: "https://github.com/usuario/ejemplo-repo"
 
 pool:
-  name: default
+  name: Default
 
 steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+  - script: |
+      echo "Opción seleccionada: ${{ parameters.repoOption }}"
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+      if [ "${{ parameters.repoOption }}" = "springboot" ]; then
+        echo "Repositorio: $(springbootRepo)"
+      elif [ "${{ parameters.repoOption }}" = "otro-repo" ]; then
+        echo "Repositorio: $(react)"
+      elif [ "${{ parameters.repoOption }}" = "ejemplo-repo" ]; then
+        echo "Repositorio: $(ejemplo-repoRepo)"
+      fi
+    displayName: "Imprimir repositorio seleccionado"
