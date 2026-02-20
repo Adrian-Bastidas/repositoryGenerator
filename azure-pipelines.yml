@@ -12,9 +12,14 @@ parameters:
       - node
 
   - name: newRepoName
-    displayName: "Nombre del nuevo repositorio"
+    displayName: "Nombre del nuevo repositorio (ej: mi-proyecto-api)"
     type: string
     default: "mi-nuevo-repo"
+
+  - name: projectName
+    displayName: "Nombre del proyecto (ej: MiProyectoApi) — se reemplaza en el código"
+    type: string
+    default: "MiProyecto"
 
   - name: repoVisibility
     displayName: "Visibilidad del repositorio"
@@ -37,7 +42,6 @@ variables:
 
 # ==============================================================
 # JOB 1 — Validación y selección de template
-# Responsabilidad: validar entradas y resolver qué repo clonar
 # ==============================================================
 jobs:
   - job: Validacion
@@ -47,14 +51,20 @@ jobs:
     steps:
       - powershell: |
           $ErrorActionPreference = "Stop"
+
+          # Validar nombre del repositorio
           $repoName = "${{ parameters.newRepoName }}"
+          if ([string]::IsNullOrWhiteSpace($repoName)) { throw "Nombre de repositorio vacío" }
+          if ($repoName.Length -gt 100)                { throw "Nombre de repositorio demasiado largo (máx 100 caracteres)" }
+          if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') { throw "Nombre de repositorio con caracteres inválidos. Usa solo letras, números, punto, guion o guion bajo" }
+          Write-Host "✅ Nombre de repositorio válido: $repoName"
 
-          if ([string]::IsNullOrWhiteSpace($repoName)) { throw "Nombre vacío" }
-          if ($repoName.Length -gt 100)                { throw "Nombre demasiado largo (máx 100 caracteres)" }
-          if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') { throw "Caracteres inválidos. Usa solo letras, números, punto, guion o guion bajo" }
-
-          Write-Host "✅ Nombre válido: $repoName"
-        displayName: "Validar nombre del repositorio"
+          # Validar nombre del proyecto
+          $projectName = "${{ parameters.projectName }}"
+          if ([string]::IsNullOrWhiteSpace($projectName)) { throw "Nombre de proyecto vacío" }
+          if ($projectName.Length -gt 100)               { throw "Nombre de proyecto demasiado largo (máx 100 caracteres)" }
+          Write-Host "✅ Nombre de proyecto válido: $projectName"
+        displayName: "Validar parámetros de entrada"
 
       - powershell: |
           switch ("${{ parameters.repoTemplate }}") {
@@ -68,11 +78,10 @@ jobs:
         name: SeleccionTemplate
 
   # ==============================================================
-  # JOB 2 — Creación del repositorio y carga del código
-  # Responsabilidad: crear el repo en GitHub y subir las ramas
+  # JOB 2 — Creación del repositorio en GitHub
   # ==============================================================
   - job: CreacionRepositorio
-    displayName: "Job 2 · Creación del repositorio y carga del código"
+    displayName: "Job 2 · Creación del repositorio en GitHub"
     pool:
       name: Default
     dependsOn: Validacion
@@ -116,43 +125,10 @@ jobs:
         displayName: "Crear repositorio en GitHub"
         name: CrearRepo
 
+      # Rollback si falla la creación
       - powershell: |
-          $ErrorActionPreference = "Stop"
-          $token    = "$(GITHUB_TOKEN)"
-          $cloneUrl = "https://$token@github.com/$(CrearRepo.newRepoFullName).git"
-
-          Write-Host "📥 Clonando template: $(templateRepo)"
-          git clone "https://$token@github.com/$(templateRepo).git" template
-          if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
-
-          Set-Location template
-
-          Write-Host "🔗 Apuntando al nuevo repositorio..."
-          git remote set-url origin $cloneUrl
-          if ($LASTEXITCODE -ne 0) { throw "Error al cambiar el remote" }
-
-          Write-Host "🌿 Subiendo rama main..."
-          git checkout -B main
-          git push origin main --force
-          if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de main" }
-
-          Write-Host "🌿 Creando y subiendo rama develop..."
-          git checkout -b develop
-          git push origin develop
-          if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de develop" }
-
-          Set-Location ..
-          Write-Host "✅ Ramas main y develop subidas correctamente"
-
-          Write-Host "⏳ Esperando 8 segundos para que GitHub indexe las ramas..."
-          Start-Sleep -Seconds 8
-        displayName: "Subir código template y crear ramas"
-
-      # Rollback si algo falla dentro de este job
-      - powershell: |
-          Write-Host "⚠️ Fallo en creación/carga. Iniciando rollback..."
+          Write-Host "⚠️ Fallo al crear el repositorio. Iniciando rollback..."
           if ("$(repoCreado)" -eq "true") {
-            Write-Host "🗑️ Eliminando repositorio $(CrearRepo.newRepoFullName)..."
             try {
               Invoke-RestMethod `
                 -Uri "https://api.github.com/repos/$(CrearRepo.newRepoFullName)" `
@@ -171,18 +147,155 @@ jobs:
         displayName: "Rollback — eliminar repo si hubo error"
 
   # ==============================================================
-  # JOB 3 — Protección de ramas
-  # Responsabilidad: aplicar reglas de protección sobre main y develop
-  # Nunca detiene el pipeline (best-effort)
+  # JOB 3 — Aplicar Cookiecutter y subir código
+  # Clona el template, aplica las variables con Cookiecutter
+  # usando el cookiecutter.json del propio repo del pipeline,
+  # y sube el resultado al nuevo repositorio.
   # ==============================================================
-  - job: ProteccionRamas
-    displayName: "Job 3 · Protección de ramas (best-effort)"
+  - job: AplicarTemplateYSubirCodigo
+    displayName: "Job 3 · Aplicar Cookiecutter y subir código"
     pool:
       name: Default
     dependsOn: CreacionRepositorio
     variables:
-      newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
+      templateRepo: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.templateRepo'] ]
       newRepoUrl: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoUrl'] ]
+      newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
+      repoCreado: "false"
+    steps:
+      - checkout: self
+        displayName: "Checkout del repo del pipeline (contiene cookiecutters/)"
+
+      - powershell: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "🐍 Instalando Cookiecutter..."
+          pip install cookiecutter --quiet
+          if ($LASTEXITCODE -ne 0) { throw "Error instalando Cookiecutter" }
+          Write-Host "✅ Cookiecutter instalado"
+        displayName: "Instalar Cookiecutter"
+
+      - powershell: |
+          $ErrorActionPreference = "Stop"
+          $token    = "$(GITHUB_TOKEN)"
+
+          # Rutas
+          $cookiecutterJson = "$(Build.SourcesDirectory)/cookiecutter.json"
+          $templateCloneDir = "$(Agent.TempDirectory)/template-raw"
+          $outputDir        = "$(Agent.TempDirectory)/cookiecutter-output"
+
+          # Verificar que existe el cookiecutter.json único
+          if (-not (Test-Path $cookiecutterJson)) {
+            throw "No se encontró cookiecutter.json en la raíz del repo del pipeline"
+          }
+
+          # ── 1. Clonar el template raw ────────────────────────────
+          Write-Host "📥 Clonando template: $(templateRepo)"
+          git clone "https://$token@github.com/$(templateRepo).git" $templateCloneDir
+          if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
+
+          # ── 2. Copiar el cookiecutter.json único al raíz del template clonado
+          # Cookiecutter necesita el .json en la raíz del directorio que procesa
+          Write-Host "📋 Copiando cookiecutter.json al template..."
+          Copy-Item $cookiecutterJson "$templateCloneDir/cookiecutter.json"
+
+          Write-Host "🍪 Ejecutando Cookiecutter con contexto:"
+          Write-Host "   project_name = ${{ parameters.projectName }}"
+
+          # ── 3. Ejecutar Cookiecutter ──────────────────────────────
+          # --no-input: no preguntar interactivamente
+          # --output-dir: dónde dejar el resultado
+          New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+
+          cookiecutter $templateCloneDir `
+            --no-input `
+            --output-dir $outputDir `
+            --overwrite-if-exists `
+            project_name="${{ parameters.projectName }}"
+
+          if ($LASTEXITCODE -ne 0) { throw "Error ejecutando Cookiecutter" }
+
+          # ── 4. Localizar la carpeta generada por Cookiecutter ─────
+          # Cookiecutter crea una subcarpeta con el nombre del proyecto
+          $generatedFolder = Get-ChildItem $outputDir -Directory | Select-Object -First 1
+          if (-not $generatedFolder) { throw "Cookiecutter no generó ninguna carpeta de salida" }
+
+          Write-Host "✅ Código generado en: $($generatedFolder.FullName)"
+          Write-Host "##vso[task.setvariable variable=generatedPath]$($generatedFolder.FullName)"
+        displayName: "Clonar template y aplicar Cookiecutter"
+        name: AplicarCookiecutter
+
+      - powershell: |
+          $ErrorActionPreference = "Stop"
+          $token        = "$(GITHUB_TOKEN)"
+          $cloneUrl     = "https://$token@github.com/$(newRepoFullName).git"
+          $generatedPath = "$(AplicarCookiecutter.generatedPath)"
+          $pushDir      = "$(Agent.TempDirectory)/push-dir"
+
+          # ── 1. Inicializar git en el código generado ──────────────
+          Write-Host "🔧 Preparando repositorio git en el código generado..."
+          Set-Location $generatedPath
+
+          git init
+          git remote add origin $cloneUrl
+
+          # Configurar identidad git para el agente
+          git config user.email "pipeline@azure-devops.local"
+          git config user.name  "Azure Pipeline"
+
+          # ── 2. Commit y push a main ───────────────────────────────
+          Write-Host "🌿 Subiendo rama main..."
+          git checkout -B main
+          git add .
+          git commit -m "feat: initial project structure from ${{ parameters.repoTemplate }} template
+
+          Generated by Azure Pipeline
+          - Template  : ${{ parameters.repoTemplate }}
+          - Project   : ${{ parameters.projectName }}
+          - Repo      : ${{ parameters.newRepoName }}"
+
+          git push origin main --force
+          if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de main" }
+
+          # ── 3. Crear y push develop ───────────────────────────────
+          Write-Host "🌿 Creando y subiendo rama develop..."
+          git checkout -b develop
+          git push origin develop
+          if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de develop" }
+
+          Write-Host "✅ Ramas main y develop subidas con código generado"
+
+          Write-Host "⏳ Esperando 8 segundos para que GitHub indexe las ramas..."
+          Start-Sleep -Seconds 8
+        displayName: "Subir código generado al nuevo repositorio"
+
+      # Rollback si falla este job (repo ya existe, hay que limpiarlo)
+      - powershell: |
+          Write-Host "⚠️ Fallo al aplicar template o subir código. Iniciando rollback..."
+          try {
+            Invoke-RestMethod `
+              -Uri "https://api.github.com/repos/$(newRepoFullName)" `
+              -Method DELETE `
+              -Headers @{ Authorization = "Bearer $(GITHUB_TOKEN)" }
+            Write-Host "✅ Repositorio eliminado en rollback"
+          }
+          catch {
+            Write-Host "##vso[task.logissue type=warning]No se pudo eliminar el repositorio en rollback: $($_.Exception.Message)"
+          }
+          exit 1
+        condition: failed()
+        displayName: "Rollback — eliminar repo si hubo error"
+
+  # ==============================================================
+  # JOB 4 — Protección de ramas (best-effort)
+  # ==============================================================
+  - job: ProteccionRamas
+    displayName: "Job 4 · Protección de ramas (best-effort)"
+    pool:
+      name: Default
+    dependsOn: AplicarTemplateYSubirCodigo
+    variables:
+      newRepoFullName: $[ dependencies.AplicarTemplateYSubirCodigo.outputs['CrearRepo.newRepoFullName'] ]
     steps:
       - powershell: |
           $headers = @{
@@ -192,7 +305,6 @@ jobs:
 
           function Protect-WithRuleset {
             param([string]$branchName)
-
             $body = @{
               name        = "protect-$branchName"
               target      = "branch"
@@ -229,7 +341,6 @@ jobs:
 
           function Protect-WithBranchProtection {
             param([string]$branchName)
-
             $body = @{
               required_status_checks        = $null
               enforce_admins                = $true
@@ -253,10 +364,8 @@ jobs:
 
           function Protect-Branch {
             param([string]$branchName)
-
             Write-Host "🛡️ Intentando proteger rama '$branchName'..."
 
-            # Intento 1: Rulesets
             try {
               Protect-WithRuleset -branchName $branchName
               Write-Host "✅ '$branchName' protegida con Rulesets"
@@ -267,7 +376,6 @@ jobs:
               Write-Host "⚠️  Rulesets falló en '$branchName' (HTTP $code) → intentando Branch Protection legacy..."
             }
 
-            # Intento 2: Branch Protection legacy
             try {
               Protect-WithBranchProtection -branchName $branchName
               Write-Host "✅ '$branchName' protegida con Branch Protection legacy"
@@ -283,33 +391,33 @@ jobs:
 
           Protect-Branch -branchName "main"
           Protect-Branch -branchName "develop"
-
           exit 0
         displayName: "Aplicar protección en main y develop"
 
   # ==============================================================
-  # JOB 4 — Resumen final
-  # Responsabilidad: mostrar resultado consolidado del pipeline
+  # JOB 5 — Resumen final
   # ==============================================================
   - job: ResumenFinal
-    displayName: "Job 4 · Resumen final"
+    displayName: "Job 5 · Resumen final"
     pool:
       name: Default
     dependsOn:
-      - CreacionRepositorio
+      - AplicarTemplateYSubirCodigo
       - ProteccionRamas
-    condition: succeeded('CreacionRepositorio')
+    condition: succeeded('AplicarTemplateYSubirCodigo')
     variables:
-      newRepoUrl: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoUrl'] ]
-      newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
+      newRepoUrl: $[ dependencies.AplicarTemplateYSubirCodigo.outputs['CrearRepo.newRepoUrl'] ]
+      newRepoFullName: $[ dependencies.AplicarTemplateYSubirCodigo.outputs['CrearRepo.newRepoFullName'] ]
     steps:
       - powershell: |
           Write-Host "========================================"
           Write-Host "✅ Repositorio creado y configurado"
           Write-Host "📦 Template    : ${{ parameters.repoTemplate }}"
+          Write-Host "📛 Proyecto    : ${{ parameters.projectName }}"
+          Write-Host "🗂️  Repositorio : ${{ parameters.newRepoName }}"
           Write-Host "🔒 Visibilidad : ${{ parameters.repoVisibility }}"
           Write-Host "🌿 Ramas       : main, develop"
-          Write-Host "🛡️ Protección  : ver logs del Job 3"
+          Write-Host "🛡️ Protección  : ver logs del Job 4"
           Write-Host "🔗 URL         : $(newRepoUrl)"
           Write-Host "========================================"
         displayName: "Mostrar resumen"
