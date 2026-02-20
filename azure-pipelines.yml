@@ -47,6 +47,14 @@ pool:
   name: Default
 
 steps:
+  - powershell: |
+      $token = "$(GITHUB_TOKEN)"
+      Write-Host "Longitud del token: $($token.Length)"
+      Write-Host "Primeros 4 caracteres: $($token.Substring(0, [Math]::Min(4, $token.Length)))"
+      Write-Host "Es nulo o vacío: $([string]::IsNullOrWhiteSpace($token))"
+      Write-Host "Valor literal sin expandir: $(GITHUB_TOKEN)"
+    displayName: "DEBUG — Ver estado del token"
+
   # ============================================================
   # 0. PREFLIGHT — Verificar herramientas, permisos y tokens
   # ============================================================
