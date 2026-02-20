@@ -297,25 +297,23 @@ jobs:
           $token    = "$(GITHUB_TOKEN)"
           $python   = "$(PYTHON_EXE)"
 
-          $cookiecutterJson = "$(Build.SourcesDirectory)/cookiecutter.json"
           $templateCloneDir = "$(Agent.TempDirectory)/template-raw"
           $outputDir        = "$(Agent.TempDirectory)/cookiecutter-output"
-
-          # Verificar cookiecutter.json
-          if (-not (Test-Path $cookiecutterJson)) {
-            throw "No se encontró cookiecutter.json en la raíz del repo del pipeline"
-          }
 
           # ── 1. Clonar el template raw ─────────────────────────────
           Write-Host "📥 Clonando template: $(templateRepo)"
           git clone "https://$token@github.com/$(templateRepo).git" $templateCloneDir
           if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
 
-          # ── 2. Copiar el cookiecutter.json al raíz del template ───
-          Write-Host "📋 Copiando cookiecutter.json al template..."
-          Copy-Item $cookiecutterJson "$templateCloneDir/cookiecutter.json"
+          # ── 2. Crear cookiecutter.json TEMPORAL ───────────────────
+          Write-Host "📋 Creando cookiecutter.json desde el pipeline..."
+          $cookiecutterPath = Join-Path $templateCloneDir "cookiecutter.json"
 
-          # ── 3. Ejecutar Cookiecutter via python -m ────────────────
+          @{
+            project_name = "${{ parameters.projectName }}"
+          } | ConvertTo-Json -Depth 10 | Out-File -FilePath $cookiecutterPath -Encoding UTF8 -Force
+
+          # ── 3. Ejecutar Cookiecutter ──────────────────────────────
           Write-Host "🍪 Ejecutando Cookiecutter..."
           Write-Host "   project_name = ${{ parameters.projectName }}"
 
@@ -324,12 +322,14 @@ jobs:
           & $python -m cookiecutter $templateCloneDir `
             --no-input `
             --output-dir $outputDir `
-            --overwrite-if-exists `
-            "project_name=${{ parameters.projectName }}"
+            --overwrite-if-exists
 
           if ($LASTEXITCODE -ne 0) { throw "Error ejecutando Cookiecutter" }
 
-          # ── 4. Localizar la carpeta generada ─────────────────────
+          # ── 4. Eliminar cookiecutter.json (cleanup) ───────────────
+          Remove-Item -Path $cookiecutterPath -Force -ErrorAction SilentlyContinue
+
+          # ── 5. Localizar la carpeta generada ──────────────────────
           $generatedFolder = Get-ChildItem $outputDir -Directory | Select-Object -First 1
           if (-not $generatedFolder) { throw "Cookiecutter no generó ninguna carpeta de salida" }
 
