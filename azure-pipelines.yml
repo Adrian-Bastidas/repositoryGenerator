@@ -210,6 +210,12 @@ steps:
           Authorization = "Bearer $(GITHUB_TOKEN)"
           Accept        = "application/vnd.github+json"
       }
+      $response = Invoke-RestMethod `
+      -Uri "https://api.github.com/repos/$(newRepoFullName)" `
+      -Headers $headers `
+      -Method GET
+
+      $response.permissions | ConvertTo-Json
 
       $body = @{
           required_pull_request_reviews = @{
