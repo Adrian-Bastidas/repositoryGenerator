@@ -34,256 +34,282 @@ variables:
     value: "Adrian-Bastidas/ArqGAngular"
   - name: nodeRepo
     value: "Adrian-Bastidas/ArqGNode"
-  - name: repoCreado
-    value: "false"
 
-pool:
-  name: Default
+# ==============================================================
+# JOB 1 — Validación y selección de template
+# Responsabilidad: validar entradas y resolver qué repo clonar
+# ==============================================================
+jobs:
+  - job: Validacion
+    displayName: "Job 1 · Validación y selección de template"
+    pool:
+      name: Default
+    steps:
+      - powershell: |
+          $ErrorActionPreference = "Stop"
+          $repoName = "${{ parameters.newRepoName }}"
 
-steps:
-  # ============================================================
-  # 1. VALIDAR NOMBRE
-  # ============================================================
-  - powershell: |
-      $ErrorActionPreference = "Stop"
-      $repoName = "${{ parameters.newRepoName }}"
+          if ([string]::IsNullOrWhiteSpace($repoName)) { throw "Nombre vacío" }
+          if ($repoName.Length -gt 100)                { throw "Nombre demasiado largo (máx 100 caracteres)" }
+          if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') { throw "Caracteres inválidos. Usa solo letras, números, punto, guion o guion bajo" }
 
-      if ([string]::IsNullOrWhiteSpace($repoName)) { throw "Nombre vacío" }
-      if ($repoName.Length -gt 100)                { throw "Nombre demasiado largo (máx 100 caracteres)" }
-      if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') { throw "Caracteres inválidos. Usa solo letras, números, punto, guion o guion bajo" }
+          Write-Host "✅ Nombre válido: $repoName"
+        displayName: "Validar nombre del repositorio"
 
-      Write-Host "✅ Nombre válido: $repoName"
-    displayName: "Validar nombre"
+      - powershell: |
+          switch ("${{ parameters.repoTemplate }}") {
+            "springboot" { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(springbootRepo)" }
+            "react"      { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(reactRepo)" }
+            "angular"    { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(angularRepo)" }
+            "node"       { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(nodeRepo)" }
+          }
+          Write-Host "✅ Template seleccionado: ${{ parameters.repoTemplate }}"
+        displayName: "Seleccionar template"
+        name: SeleccionTemplate
 
-  # ============================================================
-  # 2. SELECCIONAR TEMPLATE
-  # ============================================================
-  - powershell: |
-      switch ("${{ parameters.repoTemplate }}") {
-        "springboot" { Write-Host "##vso[task.setvariable variable=templateRepo]$(springbootRepo)" }
-        "react"      { Write-Host "##vso[task.setvariable variable=templateRepo]$(reactRepo)" }
-        "angular"    { Write-Host "##vso[task.setvariable variable=templateRepo]$(angularRepo)" }
-        "node"       { Write-Host "##vso[task.setvariable variable=templateRepo]$(nodeRepo)" }
-      }
-      Write-Host "✅ Template seleccionado: ${{ parameters.repoTemplate }}"
-    displayName: "Seleccionar template"
+  # ==============================================================
+  # JOB 2 — Creación del repositorio y carga del código
+  # Responsabilidad: crear el repo en GitHub y subir las ramas
+  # ==============================================================
+  - job: CreacionRepositorio
+    displayName: "Job 2 · Creación del repositorio y carga del código"
+    pool:
+      name: Default
+    dependsOn: Validacion
+    variables:
+      templateRepo: $[ dependencies.Validacion.outputs['SeleccionTemplate.templateRepo'] ]
+      repoCreado: "false"
+    steps:
+      - powershell: |
+          $ErrorActionPreference = "Stop"
+          $headers = @{
+            Authorization = "Bearer $(GITHUB_TOKEN)"
+            Accept        = "application/vnd.github+json"
+          }
 
-  # ============================================================
-  # 3. CREAR REPOSITORIO
-  # ============================================================
-  - powershell: |
-      $ErrorActionPreference = "Stop"
-      $headers = @{
-        Authorization = "Bearer $(GITHUB_TOKEN)"
-        Accept        = "application/vnd.github+json"
-      }
+          $isPrivate = ("${{ parameters.repoVisibility }}" -eq "private")
 
-      $isPrivate = ("${{ parameters.repoVisibility }}" -eq "private")
+          $body = @{
+            name      = "${{ parameters.newRepoName }}"
+            private   = $isPrivate
+            auto_init = $true
+          } | ConvertTo-Json
 
-      $body = @{
-        name      = "${{ parameters.newRepoName }}"
-        private   = $isPrivate
-        auto_init = $true
-      } | ConvertTo-Json
+          Write-Host "📦 Creando repositorio '${{ parameters.newRepoName }}' (privado: $isPrivate)..."
 
-      Write-Host "📦 Creando repositorio '${{ parameters.newRepoName }}' (privado: $isPrivate)..."
+          try {
+            $repo = Invoke-RestMethod `
+              -Uri "https://api.github.com/user/repos" `
+              -Method POST `
+              -Headers $headers `
+              -Body $body `
+              -ContentType "application/json"
 
-      try {
-        $repo = Invoke-RestMethod `
-          -Uri "https://api.github.com/user/repos" `
-          -Method POST `
-          -Headers $headers `
-          -Body $body `
-          -ContentType "application/json"
+            Write-Host "##vso[task.setvariable variable=newRepoUrl;isOutput=true]$($repo.clone_url)"
+            Write-Host "##vso[task.setvariable variable=newRepoFullName;isOutput=true]$($repo.full_name)"
+            Write-Host "##vso[task.setvariable variable=repoCreado]true"
+            Write-Host "✅ Repositorio creado: $($repo.full_name)"
+          }
+          catch {
+            throw "No se pudo crear el repositorio. Detalle: $($_.Exception.Message)"
+          }
+        displayName: "Crear repositorio en GitHub"
+        name: CrearRepo
 
-        Write-Host "##vso[task.setvariable variable=newRepoUrl]$($repo.clone_url)"
-        Write-Host "##vso[task.setvariable variable=newRepoFullName]$($repo.full_name)"
-        Write-Host "##vso[task.setvariable variable=repoCreado]true"
-        Write-Host "✅ Repositorio creado: $($repo.full_name)"
-      }
-      catch {
-        throw "No se pudo crear el repositorio. Detalle: $($_.Exception.Message)"
-      }
-    displayName: "Crear repositorio"
+      - powershell: |
+          $ErrorActionPreference = "Stop"
+          $token    = "$(GITHUB_TOKEN)"
+          $cloneUrl = "https://$token@github.com/$(CrearRepo.newRepoFullName).git"
 
-  # ============================================================
-  # 4. SUBIR TEMPLATE Y CREAR RAMAS
-  # ============================================================
-  - powershell: |
-      $ErrorActionPreference = "Stop"
-      $token    = "$(GITHUB_TOKEN)"
-      $cloneUrl = "https://$token@github.com/$(newRepoFullName).git"
+          Write-Host "📥 Clonando template: $(templateRepo)"
+          git clone "https://$token@github.com/$(templateRepo).git" template
+          if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
 
-      Write-Host "📥 Clonando template: $(templateRepo)"
-      git clone "https://$token@github.com/$(templateRepo).git" template
-      if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
+          Set-Location template
 
-      Set-Location template
+          Write-Host "🔗 Apuntando al nuevo repositorio..."
+          git remote set-url origin $cloneUrl
+          if ($LASTEXITCODE -ne 0) { throw "Error al cambiar el remote" }
 
-      Write-Host "🔗 Apuntando al nuevo repositorio..."
-      git remote set-url origin $cloneUrl
-      if ($LASTEXITCODE -ne 0) { throw "Error al cambiar el remote" }
+          Write-Host "🌿 Subiendo rama main..."
+          git checkout -B main
+          git push origin main --force
+          if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de main" }
 
-      Write-Host "🌿 Subiendo rama main..."
-      git checkout -B main
-      git push origin main --force
-      if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de main" }
+          Write-Host "🌿 Creando y subiendo rama develop..."
+          git checkout -b develop
+          git push origin develop
+          if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de develop" }
 
-      Write-Host "🌿 Creando y subiendo rama develop..."
-      git checkout -b develop
-      git push origin develop
-      if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de develop" }
+          Set-Location ..
+          Write-Host "✅ Ramas main y develop subidas correctamente"
 
-      Set-Location ..
-      Write-Host "✅ Ramas main y develop subidas correctamente"
+          Write-Host "⏳ Esperando 8 segundos para que GitHub indexe las ramas..."
+          Start-Sleep -Seconds 8
+        displayName: "Subir código template y crear ramas"
 
-      Write-Host "⏳ Esperando 8 segundos para que GitHub indexe las ramas..."
-      Start-Sleep -Seconds 8
-    displayName: "Subir código y crear ramas"
+      # Rollback si algo falla dentro de este job
+      - powershell: |
+          Write-Host "⚠️ Fallo en creación/carga. Iniciando rollback..."
+          if ("$(repoCreado)" -eq "true") {
+            Write-Host "🗑️ Eliminando repositorio $(CrearRepo.newRepoFullName)..."
+            try {
+              Invoke-RestMethod `
+                -Uri "https://api.github.com/repos/$(CrearRepo.newRepoFullName)" `
+                -Method DELETE `
+                -Headers @{ Authorization = "Bearer $(GITHUB_TOKEN)" }
+              Write-Host "✅ Repositorio eliminado en rollback"
+            }
+            catch {
+              Write-Host "##vso[task.logissue type=warning]No se pudo eliminar el repositorio en rollback: $($_.Exception.Message)"
+            }
+          } else {
+            Write-Host "ℹ️ El repositorio no llegó a crearse, no hay rollback necesario."
+          }
+          exit 1
+        condition: failed()
+        displayName: "Rollback — eliminar repo si hubo error"
 
-  # ============================================================
-  # 5. PROTEGER RAMAS (best-effort — nunca detiene el pipeline)
-  # Intenta Rulesets primero, luego Branch Protection legacy.
-  # Si ambos fallan advierte y continúa.
-  # ============================================================
-  - powershell: |
-      $headers = @{
-        Authorization = "Bearer $(GITHUB_TOKEN)"
-        Accept        = "application/vnd.github+json"
-      }
+  # ==============================================================
+  # JOB 3 — Protección de ramas
+  # Responsabilidad: aplicar reglas de protección sobre main y develop
+  # Nunca detiene el pipeline (best-effort)
+  # ==============================================================
+  - job: ProteccionRamas
+    displayName: "Job 3 · Protección de ramas (best-effort)"
+    pool:
+      name: Default
+    dependsOn: CreacionRepositorio
+    variables:
+      newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
+      newRepoUrl: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoUrl'] ]
+    steps:
+      - powershell: |
+          $headers = @{
+            Authorization = "Bearer $(GITHUB_TOKEN)"
+            Accept        = "application/vnd.github+json"
+          }
 
-      function Protect-WithRuleset {
-        param([string]$branchName)
+          function Protect-WithRuleset {
+            param([string]$branchName)
 
-        $body = @{
-          name        = "protect-$branchName"
-          target      = "branch"
-          enforcement = "active"
-          conditions  = @{
-            ref_name = @{
-              include = @("refs/heads/$branchName")
-              exclude = @()
+            $body = @{
+              name        = "protect-$branchName"
+              target      = "branch"
+              enforcement = "active"
+              conditions  = @{
+                ref_name = @{
+                  include = @("refs/heads/$branchName")
+                  exclude = @()
+                }
+              }
+              rules = @(
+                @{
+                  type       = "pull_request"
+                  parameters = @{
+                    required_approving_review_count   = 1
+                    dismiss_stale_reviews_on_push     = $true
+                    require_code_owner_review         = $false
+                    require_last_push_approval        = $false
+                    required_review_thread_resolution = $false
+                  }
+                },
+                @{ type = "non_fast_forward" },
+                @{ type = "deletion" }
+              )
+            } | ConvertTo-Json -Depth 10
+
+            Invoke-RestMethod `
+              -Uri "https://api.github.com/repos/$(newRepoFullName)/rulesets" `
+              -Method POST `
+              -Headers $headers `
+              -Body $body `
+              -ContentType "application/json" | Out-Null
+          }
+
+          function Protect-WithBranchProtection {
+            param([string]$branchName)
+
+            $body = @{
+              required_status_checks        = $null
+              enforce_admins                = $true
+              required_pull_request_reviews = @{
+                required_approving_review_count = 1
+                dismiss_stale_reviews           = $true
+                require_code_owner_reviews      = $false
+              }
+              restrictions       = $null
+              allow_force_pushes = $false
+              allow_deletions    = $false
+            } | ConvertTo-Json -Depth 5
+
+            Invoke-RestMethod `
+              -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/$branchName/protection" `
+              -Method PUT `
+              -Headers $headers `
+              -Body $body `
+              -ContentType "application/json" | Out-Null
+          }
+
+          function Protect-Branch {
+            param([string]$branchName)
+
+            Write-Host "🛡️ Intentando proteger rama '$branchName'..."
+
+            # Intento 1: Rulesets
+            try {
+              Protect-WithRuleset -branchName $branchName
+              Write-Host "✅ '$branchName' protegida con Rulesets"
+              return
+            }
+            catch {
+              $code = $_.Exception.Response.StatusCode.value__
+              Write-Host "⚠️  Rulesets falló en '$branchName' (HTTP $code) → intentando Branch Protection legacy..."
+            }
+
+            # Intento 2: Branch Protection legacy
+            try {
+              Protect-WithBranchProtection -branchName $branchName
+              Write-Host "✅ '$branchName' protegida con Branch Protection legacy"
+              return
+            }
+            catch {
+              $code = $_.Exception.Response.StatusCode.value__
+              Write-Host "##vso[task.logissue type=warning]No se pudo proteger '$branchName' con ningún método (HTTP $code)."
+              Write-Host "##vso[task.logissue type=warning]Causa probable: repo privado en cuenta GitHub Free no soporta protección de ramas vía API."
+              Write-Host "##vso[task.logissue type=warning]Aplica la protección manualmente desde GitHub → Settings → Branches."
             }
           }
-          rules = @(
-            @{
-              type       = "pull_request"
-              parameters = @{
-                required_approving_review_count   = 1
-                dismiss_stale_reviews_on_push     = $true
-                require_code_owner_review         = $false
-                require_last_push_approval        = $false
-                required_review_thread_resolution = $false
-              }
-            },
-            @{ type = "non_fast_forward" },
-            @{ type = "deletion" }
-          )
-        } | ConvertTo-Json -Depth 10
 
-        Invoke-RestMethod `
-          -Uri "https://api.github.com/repos/$(newRepoFullName)/rulesets" `
-          -Method POST `
-          -Headers $headers `
-          -Body $body `
-          -ContentType "application/json" | Out-Null
-      }
+          Protect-Branch -branchName "main"
+          Protect-Branch -branchName "develop"
 
-      function Protect-WithBranchProtection {
-        param([string]$branchName)
+          exit 0
+        displayName: "Aplicar protección en main y develop"
 
-        $body = @{
-          required_status_checks        = $null
-          enforce_admins                = $true
-          required_pull_request_reviews = @{
-            required_approving_review_count = 1
-            dismiss_stale_reviews           = $true
-            require_code_owner_reviews      = $false
-          }
-          restrictions       = $null
-          allow_force_pushes = $false
-          allow_deletions    = $false
-        } | ConvertTo-Json -Depth 5
-
-        Invoke-RestMethod `
-          -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/$branchName/protection" `
-          -Method PUT `
-          -Headers $headers `
-          -Body $body `
-          -ContentType "application/json" | Out-Null
-      }
-
-      function Protect-Branch {
-        param([string]$branchName)
-
-        Write-Host "🛡️ Intentando proteger rama '$branchName'..."
-
-        # Intento 1: Rulesets
-        try {
-          Protect-WithRuleset -branchName $branchName
-          Write-Host "✅ '$branchName' protegida con Rulesets"
-          return
-        }
-        catch {
-          $code = $_.Exception.Response.StatusCode.value__
-          Write-Host "⚠️  Rulesets falló en '$branchName' (HTTP $code) → intentando Branch Protection legacy..."
-        }
-
-        # Intento 2: Branch Protection legacy
-        try {
-          Protect-WithBranchProtection -branchName $branchName
-          Write-Host "✅ '$branchName' protegida con Branch Protection legacy"
-          return
-        }
-        catch {
-          $code = $_.Exception.Response.StatusCode.value__
-          Write-Host "##vso[task.logissue type=warning]No se pudo proteger '$branchName' con ningún método (HTTP $code)."
-          Write-Host "##vso[task.logissue type=warning]Causa probable: repo privado en cuenta GitHub Free no soporta protección de ramas vía API."
-          Write-Host "##vso[task.logissue type=warning]Aplica la protección manualmente desde GitHub → Settings → Branches."
-        }
-      }
-
-      Protect-Branch -branchName "main"
-      Protect-Branch -branchName "develop"
-
-      exit 0
-    displayName: "Proteger ramas (best-effort)"
-
-  # ============================================================
-  # ROLLBACK — Solo si el pipeline falla
-  # ============================================================
-  - powershell: |
-      Write-Host "⚠️ Pipeline fallido. Iniciando rollback..."
-      if ("$(repoCreado)" -eq "true") {
-        Write-Host "🗑️ Eliminando repositorio $(newRepoFullName)..."
-        try {
-          Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/$(newRepoFullName)" `
-            -Method DELETE `
-            -Headers @{ Authorization = "Bearer $(GITHUB_TOKEN)" }
-          Write-Host "✅ Repositorio eliminado en rollback"
-        }
-        catch {
-          Write-Host "##vso[task.logissue type=warning]No se pudo eliminar el repositorio en rollback: $($_.Exception.Message)"
-        }
-      } else {
-        Write-Host "ℹ️ El repositorio no llegó a crearse, no hay rollback necesario."
-      }
-      exit 1
-    condition: failed()
-    displayName: "Rollback"
-
-  # ============================================================
-  # RESUMEN FINAL
-  # ============================================================
-  - powershell: |
-      Write-Host "========================================"
-      Write-Host "✅ Repositorio creado y configurado"
-      Write-Host "📦 Template    : ${{ parameters.repoTemplate }}"
-      Write-Host "🔒 Visibilidad : ${{ parameters.repoVisibility }}"
-      Write-Host "🌿 Ramas       : main, develop"
-      Write-Host "🛡️ Protección  : ver logs del paso 'Proteger ramas'"
-      Write-Host "🔗 URL         : $(newRepoUrl)"
-      Write-Host "========================================"
-    condition: succeeded()
-    displayName: "Resumen final"
+  # ==============================================================
+  # JOB 4 — Resumen final
+  # Responsabilidad: mostrar resultado consolidado del pipeline
+  # ==============================================================
+  - job: ResumenFinal
+    displayName: "Job 4 · Resumen final"
+    pool:
+      name: Default
+    dependsOn:
+      - CreacionRepositorio
+      - ProteccionRamas
+    condition: succeeded('CreacionRepositorio')
+    variables:
+      newRepoUrl: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoUrl'] ]
+      newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
+    steps:
+      - powershell: |
+          Write-Host "========================================"
+          Write-Host "✅ Repositorio creado y configurado"
+          Write-Host "📦 Template    : ${{ parameters.repoTemplate }}"
+          Write-Host "🔒 Visibilidad : ${{ parameters.repoVisibility }}"
+          Write-Host "🌿 Ramas       : main, develop"
+          Write-Host "🛡️ Protección  : ver logs del Job 3"
+          Write-Host "🔗 URL         : $(newRepoUrl)"
+          Write-Host "========================================"
+        displayName: "Mostrar resumen"
