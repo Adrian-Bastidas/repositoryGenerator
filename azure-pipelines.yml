@@ -8,7 +8,8 @@ parameters:
     values:
       - springboot
       - react
-      - ejemplo-repo
+      - angular
+      - node
 
   - name: newRepoName
     displayName: "Nombre del nuevo repositorio"
@@ -29,8 +30,10 @@ variables:
     value: "Adrian-Bastidas/AqrGSprinboot"
   - name: reactRepo
     value: "Adrian-Bastidas/ArqGReact"
-  - name: ejemploRepo
-    value: "usuario/ejemplo-repo"
+  - name: angularRepo
+    value: "Adrian-Bastidas/ArqGAngular"
+  - name: nodeRepo
+    value: "Adrian-Bastidas/ArqGNode"
   - name: repoCreado
     value: "false"
 
@@ -56,38 +59,17 @@ steps:
   # 2. SELECCIONAR TEMPLATE
   # ============================================================
   - powershell: |
-      if ("${{ parameters.repoTemplate }}" -eq "springboot") {
-        Write-Host "##vso[task.setvariable variable=templateRepo]$(springbootRepo)"
-      } elseif ("${{ parameters.repoTemplate }}" -eq "react") {
-        Write-Host "##vso[task.setvariable variable=templateRepo]$(reactRepo)"
-      } else {
-        Write-Host "##vso[task.setvariable variable=templateRepo]$(ejemploRepo)"
+      switch ("${{ parameters.repoTemplate }}") {
+        "springboot" { Write-Host "##vso[task.setvariable variable=templateRepo]$(springbootRepo)" }
+        "react"      { Write-Host "##vso[task.setvariable variable=templateRepo]$(reactRepo)" }
+        "angular"    { Write-Host "##vso[task.setvariable variable=templateRepo]$(angularRepo)" }
+        "node"       { Write-Host "##vso[task.setvariable variable=templateRepo]$(nodeRepo)" }
       }
       Write-Host "✅ Template seleccionado: ${{ parameters.repoTemplate }}"
     displayName: "Seleccionar template"
 
   # ============================================================
-  # 3. DETECTAR SI SE PUEDE APLICAR PROTECCIÓN DE RAMAS
-  # Cuenta Free + repo privado = protección no disponible por API
-  # ============================================================
-  - powershell: |
-      $ErrorActionPreference = "Stop"
-      $esPrivado = ("${{ parameters.repoVisibility }}" -eq "private")
-
-      if ($esPrivado) {
-        Write-Host "##vso[task.logissue type=warning]⚠️  Cuenta GitHub Free + repo PRIVADO detectado."
-        Write-Host "##vso[task.logissue type=warning]La protección de ramas NO está disponible para repos privados en cuentas gratuitas."
-        Write-Host "##vso[task.logissue type=warning]El repositorio se creará correctamente pero SIN protección de ramas."
-        Write-Host "##vso[task.logissue type=warning]Para habilitar protección, actualiza tu cuenta a GitHub Pro o haz el repo público."
-        Write-Host "##vso[task.setvariable variable=aplicarProteccion]false"
-      } else {
-        Write-Host "✅ Repo público en cuenta Free: protección disponible vía Rulesets."
-        Write-Host "##vso[task.setvariable variable=aplicarProteccion]true"
-      }
-    displayName: "Detectar disponibilidad de protección"
-
-  # ============================================================
-  # 4. CREAR REPOSITORIO
+  # 3. CREAR REPOSITORIO
   # ============================================================
   - powershell: |
       $ErrorActionPreference = "Stop"
@@ -125,7 +107,7 @@ steps:
     displayName: "Crear repositorio"
 
   # ============================================================
-  # 5. SUBIR TEMPLATE Y CREAR RAMAS
+  # 4. SUBIR TEMPLATE Y CREAR RAMAS
   # ============================================================
   - powershell: |
       $ErrorActionPreference = "Stop"
@@ -160,29 +142,18 @@ steps:
     displayName: "Subir código y crear ramas"
 
   # ============================================================
-  # 6. PROTEGER RAMAS — Solo repos públicos (cuenta Free)
+  # 5. PROTEGER RAMAS (best-effort — nunca detiene el pipeline)
+  # Intenta Rulesets primero, luego Branch Protection legacy.
+  # Si ambos fallan advierte y continúa.
   # ============================================================
   - powershell: |
-      $ErrorActionPreference = "Stop"
-
-      if ("$(aplicarProteccion)" -ne "true") {
-        Write-Host "⏭️ Protección de ramas omitida (repo privado en cuenta GitHub Free)."
-        exit 0
-      }
-
       $headers = @{
         Authorization = "Bearer $(GITHUB_TOKEN)"
         Accept        = "application/vnd.github+json"
       }
 
-      function Protect-BranchWithRuleset {
-        param(
-          [string]$repoFullName,
-          [string]$branchName,
-          [hashtable]$headers
-        )
-
-        Write-Host "🛡️ Protegiendo '$branchName' con Rulesets..."
+      function Protect-WithRuleset {
+        param([string]$branchName)
 
         $body = @{
           name        = "protect-$branchName"
@@ -210,25 +181,73 @@ steps:
           )
         } | ConvertTo-Json -Depth 10
 
-        try {
-          Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/$repoFullName/rulesets" `
-            -Method POST `
-            -Headers $headers `
-            -Body $body `
-            -ContentType "application/json" | Out-Null
+        Invoke-RestMethod `
+          -Uri "https://api.github.com/repos/$(newRepoFullName)/rulesets" `
+          -Method POST `
+          -Headers $headers `
+          -Body $body `
+          -ContentType "application/json" | Out-Null
+      }
 
-          Write-Host "✅ Rama '$branchName' protegida correctamente"
+      function Protect-WithBranchProtection {
+        param([string]$branchName)
+
+        $body = @{
+          required_status_checks        = $null
+          enforce_admins                = $true
+          required_pull_request_reviews = @{
+            required_approving_review_count = 1
+            dismiss_stale_reviews           = $true
+            require_code_owner_reviews      = $false
+          }
+          restrictions       = $null
+          allow_force_pushes = $false
+          allow_deletions    = $false
+        } | ConvertTo-Json -Depth 5
+
+        Invoke-RestMethod `
+          -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/$branchName/protection" `
+          -Method PUT `
+          -Headers $headers `
+          -Body $body `
+          -ContentType "application/json" | Out-Null
+      }
+
+      function Protect-Branch {
+        param([string]$branchName)
+
+        Write-Host "🛡️ Intentando proteger rama '$branchName'..."
+
+        # Intento 1: Rulesets
+        try {
+          Protect-WithRuleset -branchName $branchName
+          Write-Host "✅ '$branchName' protegida con Rulesets"
+          return
         }
         catch {
-          $statusCode = $_.Exception.Response.StatusCode.value__
-          Write-Host "##vso[task.logissue type=warning]No se pudo proteger '$branchName' (HTTP $statusCode): $($_.Exception.Message)"
+          $code = $_.Exception.Response.StatusCode.value__
+          Write-Host "⚠️  Rulesets falló en '$branchName' (HTTP $code) → intentando Branch Protection legacy..."
+        }
+
+        # Intento 2: Branch Protection legacy
+        try {
+          Protect-WithBranchProtection -branchName $branchName
+          Write-Host "✅ '$branchName' protegida con Branch Protection legacy"
+          return
+        }
+        catch {
+          $code = $_.Exception.Response.StatusCode.value__
+          Write-Host "##vso[task.logissue type=warning]No se pudo proteger '$branchName' con ningún método (HTTP $code)."
+          Write-Host "##vso[task.logissue type=warning]Causa probable: repo privado en cuenta GitHub Free no soporta protección de ramas vía API."
+          Write-Host "##vso[task.logissue type=warning]Aplica la protección manualmente desde GitHub → Settings → Branches."
         }
       }
 
-      Protect-BranchWithRuleset -repoFullName "$(newRepoFullName)" -branchName "main"    -headers $headers
-      Protect-BranchWithRuleset -repoFullName "$(newRepoFullName)" -branchName "develop" -headers $headers
-    displayName: "Proteger ramas (solo repos públicos)"
+      Protect-Branch -branchName "main"
+      Protect-Branch -branchName "develop"
+
+      exit 0
+    displayName: "Proteger ramas (best-effort)"
 
   # ============================================================
   # ROLLBACK — Solo si el pipeline falla
@@ -258,18 +277,12 @@ steps:
   # RESUMEN FINAL
   # ============================================================
   - powershell: |
-      $proteccion = if ("$(aplicarProteccion)" -eq "true") {
-        "Aplicada via Rulesets"
-      } else {
-        "No disponible (repo privado en cuenta GitHub Free)"
-      }
-
       Write-Host "========================================"
       Write-Host "✅ Repositorio creado y configurado"
       Write-Host "📦 Template    : ${{ parameters.repoTemplate }}"
       Write-Host "🔒 Visibilidad : ${{ parameters.repoVisibility }}"
       Write-Host "🌿 Ramas       : main, develop"
-      Write-Host "🛡️ Protección  : $proteccion"
+      Write-Host "🛡️ Protección  : ver logs del paso 'Proteger ramas'"
       Write-Host "🔗 URL         : $(newRepoUrl)"
       Write-Host "========================================"
     condition: succeeded()
