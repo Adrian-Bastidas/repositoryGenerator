@@ -313,11 +313,8 @@ jobs:
             project_name = "${{ parameters.projectName }}"
           } | ConvertTo-Json -Depth 10
 
-          [System.IO.File]::WriteAllText(
-            $cookiecutterPath,
-            $jsonContent,
-            New-Object System.Text.UTF8Encoding($false)
-          )
+          [System.IO.File]::WriteAllText($cookiecutterPath, $jsonContent, (New-Object System.Text.UTF8Encoding($false)))
+
 
           # ── 3. Ejecutar Cookiecutter ──────────────────────────────
           Write-Host "🍪 Ejecutando Cookiecutter..."
