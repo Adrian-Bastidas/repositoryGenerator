@@ -281,10 +281,11 @@ jobs:
       name: Default
     dependsOn:
       - Prerequisitos
+      - Validacion
       - CreacionRepositorio
     variables:
       PYTHON_EXE: $[ dependencies.Prerequisitos.outputs['InstalarCookiecutter.PYTHON_EXE'] ]
-      templateRepo: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.templateRepo'] ]
+      templateRepo: $[ dependencies.Validacion.outputs['SeleccionTemplate.templateRepo'] ]
       newRepoUrl: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoUrl'] ]
       newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
     steps:
