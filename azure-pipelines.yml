@@ -81,20 +81,20 @@ steps:
         auto_init = $true
       } | ConvertTo-Json
 
-      $res = Invoke-RestMethod `
+      $repo = Invoke-RestMethod `
         -Uri "https://api.github.com/user/repos" `
         -Method POST `
         -Headers $headers `
         -Body $body `
         -ContentType "application/json"
 
-      Write-Host "##vso[task.setvariable variable=newRepoUrl]$($res.clone_url)"
-      Write-Host "##vso[task.setvariable variable=newRepoFullName]$($res.full_name)"
+      Write-Host "##vso[task.setvariable variable=newRepoUrl]$($repo.clone_url)"
+      Write-Host "##vso[task.setvariable variable=newRepoFullName]$($repo.full_name)"
       Write-Host "##vso[task.setvariable variable=repoCreado]true"
     displayName: "Crear repositorio"
 
   # ============================================================
-  # 4. COPIAR TEMPLATE Y CREAR RAMAS
+  # 4. SUBIR TEMPLATE Y CREAR RAMAS
   # ============================================================
   - powershell: |
       $token = "$(GITHUB_TOKEN)"
@@ -108,49 +108,7 @@ steps:
     displayName: "Subir código y ramas"
 
   # ============================================================
-  # 5. RULESET PARA MAIN
-  # ============================================================
-  - powershell: |
-      Start-Sleep 5
-
-      $headers = @{
-        Authorization = "Bearer $(GITHUB_TOKEN)"
-        Accept = "application/vnd.github+json"
-      }
-
-      $body = @{
-        name = "protect-main"
-        target = "branch"
-        enforcement = "active"
-        conditions = @{
-          ref_name = @{
-            include = @("refs/heads/main")
-            exclude = @()
-          }
-        }
-        rules = @(
-          @{
-            type = "pull_request"
-            parameters = @{
-              required_approving_review_count = 1
-              dismiss_stale_reviews = $true
-            }
-          },
-          @{ type = "non_fast_forward" },
-          @{ type = "deletion" }
-        )
-      } | ConvertTo-Json -Depth 10
-
-      Invoke-RestMethod `
-        -Uri "https://api.github.com/repos/$(newRepoFullName)/rulesets" `
-        -Method POST `
-        -Headers $headers `
-        -Body $body `
-        -ContentType "application/json"
-    displayName: "Ruleset main"
-
-  # ============================================================
-  # 6. RULESET PARA DEVELOP
+  # 5. DETECTAR MÉTODO DE PROTECCIÓN
   # ============================================================
   - powershell: |
       $headers = @{
@@ -158,36 +116,144 @@ steps:
         Accept = "application/vnd.github+json"
       }
 
-      $body = @{
-        name = "protect-develop"
-        target = "branch"
-        enforcement = "active"
-        conditions = @{
-          ref_name = @{
-            include = @("refs/heads/develop")
-            exclude = @()
-          }
-        }
-        rules = @(
-          @{
-            type = "pull_request"
-            parameters = @{
-              required_approving_review_count = 1
-              dismiss_stale_reviews = $true
-            }
-          },
-          @{ type = "non_fast_forward" },
-          @{ type = "deletion" }
-        )
-      } | ConvertTo-Json -Depth 10
+      $repo = Invoke-RestMethod `
+        -Uri "https://api.github.com/repos/$(newRepoFullName)" `
+        -Headers $headers
 
-      Invoke-RestMethod `
-        -Uri "https://api.github.com/repos/$(newRepoFullName)/rulesets" `
-        -Method POST `
-        -Headers $headers `
-        -Body $body `
-        -ContentType "application/json"
-    displayName: "Ruleset develop"
+      if ($repo.private -eq $true) {
+        Write-Host "ℹ️ Repo privado → Branch Protection legacy"
+        Write-Host "##vso[task.setvariable variable=useRulesets]false"
+      } else {
+        Write-Host "ℹ️ Repo público → Rulesets"
+        Write-Host "##vso[task.setvariable variable=useRulesets]true"
+      }
+    displayName: "Detectar método de protección"
+
+  # ============================================================
+  # 6. PROTEGER RAMA MAIN
+  # ============================================================
+  - powershell: |
+      $headers = @{
+        Authorization = "Bearer $(GITHUB_TOKEN)"
+        Accept = "application/vnd.github+json"
+      }
+
+      if ("$(useRulesets)" -eq "true") {
+        Write-Host "🛡️ Protegiendo main con RULESETS"
+
+        $body = @{
+          name = "protect-main"
+          target = "branch"
+          enforcement = "active"
+          conditions = @{
+            ref_name = @{
+              include = @("refs/heads/main")
+            }
+          }
+          rules = @(
+            @{
+              type = "pull_request"
+              parameters = @{
+                required_approving_review_count = 1
+                dismiss_stale_reviews = $true
+              }
+            },
+            @{ type = "non_fast_forward" },
+            @{ type = "deletion" }
+          )
+        } | ConvertTo-Json -Depth 10
+
+        Invoke-RestMethod `
+          -Uri "https://api.github.com/repos/$(newRepoFullName)/rulesets" `
+          -Method POST `
+          -Headers $headers `
+          -Body $body `
+          -ContentType "application/json"
+
+      } else {
+        Write-Host "🛡️ Protegiendo main con BRANCH PROTECTION legacy"
+
+        $body = @{
+          required_pull_request_reviews = @{
+            required_approving_review_count = 1
+            dismiss_stale_reviews = $true
+          }
+          enforce_admins = $true
+          allow_force_pushes = $false
+          allow_deletions = $false
+        } | ConvertTo-Json -Depth 5
+
+        Invoke-RestMethod `
+          -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/main/protection" `
+          -Method PUT `
+          -Headers $headers `
+          -Body $body `
+          -ContentType "application/json"
+      }
+    displayName: "Proteger main"
+
+  # ============================================================
+  # 7. PROTEGER RAMA DEVELOP
+  # ============================================================
+  - powershell: |
+      $headers = @{
+        Authorization = "Bearer $(GITHUB_TOKEN)"
+        Accept = "application/vnd.github+json"
+      }
+
+      if ("$(useRulesets)" -eq "true") {
+        Write-Host "🛡️ Protegiendo develop con RULESETS"
+
+        $body = @{
+          name = "protect-develop"
+          target = "branch"
+          enforcement = "active"
+          conditions = @{
+            ref_name = @{
+              include = @("refs/heads/develop")
+            }
+          }
+          rules = @(
+            @{
+              type = "pull_request"
+              parameters = @{
+                required_approving_review_count = 1
+                dismiss_stale_reviews = $true
+              }
+            },
+            @{ type = "non_fast_forward" },
+            @{ type = "deletion" }
+          )
+        } | ConvertTo-Json -Depth 10
+
+        Invoke-RestMethod `
+          -Uri "https://api.github.com/repos/$(newRepoFullName)/rulesets" `
+          -Method POST `
+          -Headers $headers `
+          -Body $body `
+          -ContentType "application/json"
+
+      } else {
+        Write-Host "🛡️ Protegiendo develop con BRANCH PROTECTION legacy"
+
+        $body = @{
+          required_pull_request_reviews = @{
+            required_approving_review_count = 1
+            dismiss_stale_reviews = $true
+          }
+          enforce_admins = $true
+          allow_force_pushes = $false
+          allow_deletions = $false
+        } | ConvertTo-Json -Depth 5
+
+        Invoke-RestMethod `
+          -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/develop/protection" `
+          -Method PUT `
+          -Headers $headers `
+          -Body $body `
+          -ContentType "application/json"
+      }
+    displayName: "Proteger develop"
 
   # ============================================================
   # ROLLBACK
@@ -207,8 +273,12 @@ steps:
   # RESUMEN
   # ============================================================
   - powershell: |
-      Write-Host "✅ Repo creado y protegido"
-      Write-Host "🔗 $(newRepoUrl)"
-      Write-Host "🌿 main / develop protegidas por Rulesets"
+      Write-Host "===================================="
+      Write-Host "✅ Repositorio creado y configurado"
+      Write-Host "📦 Template: ${{ parameters.repoTemplate }}"
+      Write-Host "🌿 Ramas: main, develop"
+      Write-Host "🛡️ Protección aplicada automáticamente"
+      Write-Host "🔗 URL: $(newRepoUrl)"
+      Write-Host "===================================="
     condition: succeeded()
     displayName: "Resumen final"
