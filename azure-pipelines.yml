@@ -40,26 +40,120 @@ variables:
   - name: nodeRepo
     value: "Adrian-Bastidas/ArqGNode"
 
-# ==============================================================
-# JOB 1 — Validación y selección de template
-# ==============================================================
 jobs:
-  - job: Validacion
-    displayName: "Job 1 · Validación y selección de template"
+  # ==============================================================
+  # JOB 0 — Prerequisitos
+  # Verifica e instala todo lo necesario en el agente Windows
+  # antes de que arranque cualquier otro job.
+  # Herramientas: Python, pip, Cookiecutter, git
+  # ==============================================================
+  - job: Prerequisitos
+    displayName: "Job 0 · Prerequisitos — instalar herramientas"
     pool:
       name: Default
     steps:
       - powershell: |
           $ErrorActionPreference = "Stop"
 
-          # Validar nombre del repositorio
+          # ── Git ───────────────────────────────────────────────────
+          Write-Host "🔍 Verificando git..."
+          $gitPath = Get-Command git -ErrorAction SilentlyContinue
+          if (-not $gitPath) { throw "git no está instalado o no está en el PATH. Instálalo desde https://git-scm.com" }
+          Write-Host "✅ git: $(git --version)"
+
+          # ── Python ───────────────────────────────────────────────
+          Write-Host "🔍 Verificando Python..."
+
+          # Buscar python en rutas comunes de Windows si no está en PATH
+          $pythonCandidates = @(
+            "python",
+            "python3",
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python39\python.exe",
+            "C:\Python312\python.exe",
+            "C:\Python311\python.exe",
+            "C:\Python310\python.exe",
+            "C:\Python39\python.exe",
+            "C:\Program Files\Python312\python.exe",
+            "C:\Program Files\Python311\python.exe",
+            "C:\Program Files\Python310\python.exe"
+          )
+
+          $pythonExe = $null
+          foreach ($candidate in $pythonCandidates) {
+            try {
+              $ver = & $candidate --version 2>&1
+              if ($LASTEXITCODE -eq 0 -and $ver -match "Python 3") {
+                $pythonExe = $candidate
+                Write-Host "✅ Python encontrado: $candidate — $ver"
+                break
+              }
+            } catch { }
+          }
+
+          if (-not $pythonExe) {
+            Write-Host "⚙️ Python no encontrado. Instalando via winget..."
+            winget install --id Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements
+            if ($LASTEXITCODE -ne 0) { throw "Error instalando Python via winget" }
+
+            # Refrescar PATH tras instalación
+            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
+                        [System.Environment]::GetEnvironmentVariable("PATH", "User")
+
+            $pythonExe = "python"
+            Write-Host "✅ Python instalado correctamente"
+          }
+
+          # Exportar la ruta de python para los siguientes steps
+          Write-Host "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$pythonExe"
+        displayName: "Verificar / instalar Python"
+        name: CheckPython
+
+      - powershell: |
+          $ErrorActionPreference = "Stop"
+          $pythonExe = "$(CheckPython.PYTHON_EXE)"
+
+          Write-Host "🔍 Verificando pip..."
+          $pipVer = & $pythonExe -m pip --version 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "pip no disponible para $pythonExe" }
+          Write-Host "✅ pip: $pipVer"
+
+          Write-Host "🍪 Instalando / actualizando Cookiecutter..."
+          & $pythonExe -m pip install --upgrade cookiecutter --quiet
+          if ($LASTEXITCODE -ne 0) { throw "Error instalando Cookiecutter" }
+
+          # Verificar que cookiecutter quedó accesible
+          $ccVer = & $pythonExe -m cookiecutter --version 2>&1
+          Write-Host "✅ Cookiecutter listo: $ccVer"
+
+          # Exportar el comando canónico para invocar cookiecutter en otros jobs
+          # Siempre via "python -m cookiecutter" para evitar problemas de PATH en Windows
+          $cookiecutterCmd = "$pythonExe -m cookiecutter"
+          Write-Host "##vso[task.setvariable variable=COOKIECUTTER_CMD;isOutput=true]$cookiecutterCmd"
+          Write-Host "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$pythonExe"
+        displayName: "Instalar Cookiecutter"
+        name: InstalarCookiecutter
+
+  # ==============================================================
+  # JOB 1 — Validación y selección de template
+  # ==============================================================
+  - job: Validacion
+    displayName: "Job 1 · Validación y selección de template"
+    pool:
+      name: Default
+    dependsOn: Prerequisitos
+    steps:
+      - powershell: |
+          $ErrorActionPreference = "Stop"
+
           $repoName = "${{ parameters.newRepoName }}"
           if ([string]::IsNullOrWhiteSpace($repoName)) { throw "Nombre de repositorio vacío" }
           if ($repoName.Length -gt 100)                { throw "Nombre de repositorio demasiado largo (máx 100 caracteres)" }
           if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') { throw "Nombre de repositorio con caracteres inválidos. Usa solo letras, números, punto, guion o guion bajo" }
           Write-Host "✅ Nombre de repositorio válido: $repoName"
 
-          # Validar nombre del proyecto
           $projectName = "${{ parameters.projectName }}"
           if ([string]::IsNullOrWhiteSpace($projectName)) { throw "Nombre de proyecto vacío" }
           if ($projectName.Length -gt 100)               { throw "Nombre de proyecto demasiado largo (máx 100 caracteres)" }
@@ -125,7 +219,6 @@ jobs:
         displayName: "Crear repositorio en GitHub"
         name: CrearRepo
 
-      # Rollback si falla la creación
       - powershell: |
           Write-Host "⚠️ Fallo al crear el repositorio. Iniciando rollback..."
           if ("$(repoCreado)" -eq "true") {
@@ -148,66 +241,53 @@ jobs:
 
   # ==============================================================
   # JOB 3 — Aplicar Cookiecutter y subir código
-  # Clona el template, aplica las variables con Cookiecutter
-  # usando el cookiecutter.json del propio repo del pipeline,
-  # y sube el resultado al nuevo repositorio.
   # ==============================================================
   - job: AplicarTemplateYSubirCodigo
     displayName: "Job 3 · Aplicar Cookiecutter y subir código"
     pool:
       name: Default
-    dependsOn: CreacionRepositorio
+    dependsOn:
+      - Prerequisitos
+      - CreacionRepositorio
     variables:
+      PYTHON_EXE: $[ dependencies.Prerequisitos.outputs['InstalarCookiecutter.PYTHON_EXE'] ]
       templateRepo: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.templateRepo'] ]
       newRepoUrl: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoUrl'] ]
       newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
-      repoCreado: "false"
     steps:
       - checkout: self
-        displayName: "Checkout del repo del pipeline (contiene cookiecutters/)"
-
-      - powershell: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "🐍 Instalando Cookiecutter..."
-          pip install cookiecutter --quiet
-          if ($LASTEXITCODE -ne 0) { throw "Error instalando Cookiecutter" }
-          Write-Host "✅ Cookiecutter instalado"
-        displayName: "Instalar Cookiecutter"
+        displayName: "Checkout del repo del pipeline (contiene cookiecutter.json)"
 
       - powershell: |
           $ErrorActionPreference = "Stop"
           $token    = "$(GITHUB_TOKEN)"
+          $python   = "$(PYTHON_EXE)"
 
-          # Rutas
           $cookiecutterJson = "$(Build.SourcesDirectory)/cookiecutter.json"
           $templateCloneDir = "$(Agent.TempDirectory)/template-raw"
           $outputDir        = "$(Agent.TempDirectory)/cookiecutter-output"
 
-          # Verificar que existe el cookiecutter.json único
+          # Verificar cookiecutter.json
           if (-not (Test-Path $cookiecutterJson)) {
             throw "No se encontró cookiecutter.json en la raíz del repo del pipeline"
           }
 
-          # ── 1. Clonar el template raw ────────────────────────────
+          # ── 1. Clonar el template raw ─────────────────────────────
           Write-Host "📥 Clonando template: $(templateRepo)"
           git clone "https://$token@github.com/$(templateRepo).git" $templateCloneDir
           if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
 
-          # ── 2. Copiar el cookiecutter.json único al raíz del template clonado
-          # Cookiecutter necesita el .json en la raíz del directorio que procesa
+          # ── 2. Copiar el cookiecutter.json al raíz del template ───
           Write-Host "📋 Copiando cookiecutter.json al template..."
           Copy-Item $cookiecutterJson "$templateCloneDir/cookiecutter.json"
 
-          Write-Host "🍪 Ejecutando Cookiecutter con contexto:"
+          # ── 3. Ejecutar Cookiecutter via python -m ────────────────
+          Write-Host "🍪 Ejecutando Cookiecutter..."
           Write-Host "   project_name = ${{ parameters.projectName }}"
 
-          # ── 3. Ejecutar Cookiecutter ──────────────────────────────
-          # --no-input: no preguntar interactivamente
-          # --output-dir: dónde dejar el resultado
           New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
-          cookiecutter $templateCloneDir `
+          & $python -m cookiecutter $templateCloneDir `
             --no-input `
             --output-dir $outputDir `
             --overwrite-if-exists `
@@ -215,35 +295,29 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) { throw "Error ejecutando Cookiecutter" }
 
-          # ── 4. Localizar la carpeta generada por Cookiecutter ─────
-          # Cookiecutter crea una subcarpeta con el nombre del proyecto
+          # ── 4. Localizar la carpeta generada ─────────────────────
           $generatedFolder = Get-ChildItem $outputDir -Directory | Select-Object -First 1
           if (-not $generatedFolder) { throw "Cookiecutter no generó ninguna carpeta de salida" }
 
           Write-Host "✅ Código generado en: $($generatedFolder.FullName)"
-          Write-Host "##vso[task.setvariable variable=generatedPath]$($generatedFolder.FullName)"
+          Write-Host "##vso[task.setvariable variable=generatedPath;isOutput=true]$($generatedFolder.FullName)"
         displayName: "Clonar template y aplicar Cookiecutter"
         name: AplicarCookiecutter
 
       - powershell: |
           $ErrorActionPreference = "Stop"
-          $token        = "$(GITHUB_TOKEN)"
-          $cloneUrl     = "https://$token@github.com/$(newRepoFullName).git"
+          $token         = "$(GITHUB_TOKEN)"
+          $cloneUrl      = "https://$token@github.com/$(newRepoFullName).git"
           $generatedPath = "$(AplicarCookiecutter.generatedPath)"
-          $pushDir      = "$(Agent.TempDirectory)/push-dir"
 
-          # ── 1. Inicializar git en el código generado ──────────────
           Write-Host "🔧 Preparando repositorio git en el código generado..."
           Set-Location $generatedPath
 
           git init
           git remote add origin $cloneUrl
-
-          # Configurar identidad git para el agente
           git config user.email "pipeline@azure-devops.local"
           git config user.name  "Azure Pipeline"
 
-          # ── 2. Commit y push a main ───────────────────────────────
           Write-Host "🌿 Subiendo rama main..."
           git checkout -B main
           git add .
@@ -257,7 +331,6 @@ jobs:
           git push origin main --force
           if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de main" }
 
-          # ── 3. Crear y push develop ───────────────────────────────
           Write-Host "🌿 Creando y subiendo rama develop..."
           git checkout -b develop
           git push origin develop
@@ -269,7 +342,6 @@ jobs:
           Start-Sleep -Seconds 8
         displayName: "Subir código generado al nuevo repositorio"
 
-      # Rollback si falla este job (repo ya existe, hay que limpiarlo)
       - powershell: |
           Write-Host "⚠️ Fallo al aplicar template o subir código. Iniciando rollback..."
           try {
