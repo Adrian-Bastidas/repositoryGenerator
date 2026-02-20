@@ -329,7 +329,7 @@ jobs:
             --no-input `
             --output-dir $outputDir `
             --overwrite-if-exists `
-            --extra-context "$extraContext"
+            "$extraContext"
 
           if ($LASTEXITCODE -ne 0) { throw "Error ejecutando Cookiecutter" }
 
