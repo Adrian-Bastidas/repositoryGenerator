@@ -294,8 +294,8 @@ jobs:
 
       - powershell: |
           $ErrorActionPreference = "Stop"
-          $token    = "$(GITHUB_TOKEN)"
-          $python   = "$(PYTHON_EXE)"
+          $token  = "$(GITHUB_TOKEN)"
+          $python = "$(PYTHON_EXE)"
 
           $templateCloneDir = "$(Agent.TempDirectory)/template-raw"
           $outputDir        = "$(Agent.TempDirectory)/cookiecutter-output"
@@ -305,18 +305,7 @@ jobs:
           git clone "https://$token@github.com/$(templateRepo).git" $templateCloneDir
           if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
 
-          # ── 2. Crear cookiecutter.json TEMPORAL ───────────────────
-          Write-Host "📋 Creando cookiecutter.json desde el pipeline..."
-          $cookiecutterPath = Join-Path $templateCloneDir "cookiecutter.json"
-
-          @{
-            project_name = "${{ parameters.projectName }}"
-          } | ConvertTo-Json -Depth 10
-
-          [System.IO.File]::WriteAllText($cookiecutterPath, $jsonContent, (New-Object System.Text.UTF8Encoding($false)))
-
-
-          # ── 3. Ejecutar Cookiecutter ──────────────────────────────
+          # ── 2. Ejecutar Cookiecutter (CLI extra context) ──────────
           Write-Host "🍪 Ejecutando Cookiecutter..."
           Write-Host "   project_name = ${{ parameters.projectName }}"
 
@@ -325,14 +314,12 @@ jobs:
           & $python -m cookiecutter $templateCloneDir `
             --no-input `
             --output-dir $outputDir `
-            --overwrite-if-exists
+            --overwrite-if-exists `
+            project_name="${{ parameters.projectName }}"
 
           if ($LASTEXITCODE -ne 0) { throw "Error ejecutando Cookiecutter" }
 
-          # ── 4. Eliminar cookiecutter.json (cleanup) ───────────────
-          Remove-Item -Path $cookiecutterPath -Force -ErrorAction SilentlyContinue
-
-          # ── 5. Localizar la carpeta generada ──────────────────────
+          # ── 3. Localizar la carpeta generada ──────────────────────
           $generatedFolder = Get-ChildItem $outputDir -Directory | Select-Object -First 1
           if (-not $generatedFolder) { throw "Cookiecutter no generó ninguna carpeta de salida" }
 
