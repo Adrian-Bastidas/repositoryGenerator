@@ -298,6 +298,7 @@ jobs:
           $python   = "$(PYTHON_EXE)"
 
           $templateCloneDir = "$(Agent.TempDirectory)/template-raw"
+          $ccTemplateDir    = "$(Agent.TempDirectory)/cc-template"
           $outputDir        = "$(Agent.TempDirectory)/cookiecutter-output"
 
           # ── 1. Clonar el template raw ─────────────────────────────
@@ -305,37 +306,43 @@ jobs:
           git clone "https://$token@github.com/$(templateRepo).git" $templateCloneDir
           if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
 
-          # ── 2. Crear cookiecutter.json TEMPORAL ───────────────────
-          Write-Host "📋 Creando cookiecutter.json desde el pipeline..."
-          $cookiecutterPath = Join-Path $templateCloneDir "cookiecutter.json"
+          # ── 2. Construir estructura de Cookiecutter ───────────────
+          # Cookiecutter necesita:
+          #   cc-template/
+          #     cookiecutter.json
+          #     {{cookiecutter.project_name}}/   ← contenido del template aquí
 
-          $jsonContent = @{
-            project_name = "${{ parameters.projectName }}"
-          } | ConvertTo-Json -Depth 10
+          New-Item -ItemType Directory -Force -Path $ccTemplateDir | Out-Null
+          $innerFolder = "$ccTemplateDir/{{cookiecutter.project_name}}"
+          New-Item -ItemType Directory -Force -Path $innerFolder | Out-Null
 
+          # Copiar archivos del template (sin .git) a la carpeta interna
+          Get-ChildItem $templateCloneDir -Force | 
+              Where-Object { $_.Name -ne ".git" } |
+              ForEach-Object {
+                  Copy-Item $_.FullName -Destination $innerFolder -Recurse -Force
+              }
+
+          # Escribir cookiecutter.json
+          $jsonContent = @{ project_name = "${{ parameters.projectName }}" } | ConvertTo-Json -Depth 5
           [System.IO.File]::WriteAllText(
-            $cookiecutterPath,
-            $jsonContent,
-            (New-Object System.Text.UTF8Encoding($false))
+              "$ccTemplateDir/cookiecutter.json",
+              $jsonContent,
+              (New-Object System.Text.UTF8Encoding($false))
           )
 
           # ── 3. Ejecutar Cookiecutter ──────────────────────────────
           Write-Host "🍪 Ejecutando Cookiecutter..."
-          Write-Host "   project_name = ${{ parameters.projectName }}"
-
           New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
-          & $python -m cookiecutter $templateCloneDir `
-            --no-input `
-            --output-dir $outputDir `
-            --overwrite-if-exists
+          & $python -m cookiecutter $ccTemplateDir `
+              --no-input `
+              --output-dir $outputDir `
+              --overwrite-if-exists
 
           if ($LASTEXITCODE -ne 0) { throw "Error ejecutando Cookiecutter" }
 
-          # ── 4. Eliminar cookiecutter.json (cleanup) ───────────────
-          Remove-Item -Path $cookiecutterPath -Force -ErrorAction SilentlyContinue
-
-          # ── 5. Localizar la carpeta generada ──────────────────────
+          # ── 4. Localizar carpeta generada ────────────────────────
           $generatedFolder = Get-ChildItem $outputDir -Directory | Select-Object -First 1
           if (-not $generatedFolder) { throw "Cookiecutter no generó ninguna carpeta de salida" }
 
