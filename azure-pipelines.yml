@@ -42,25 +42,51 @@ variables:
     value: "false"
   - name: mainProtegida
     value: "false"
+  # GH_TOKEN se resuelve UNA sola vez en el paso DEBUG y se reutiliza en todos los demas steps.
+  # Se declara aqui vacio para que Azure DevOps lo reconozca como variable de pipeline.
+  - name: GH_TOKEN
+    value: ""
 
 pool:
   name: Default
 
 steps:
+  # ============================================================
+  # DEBUG — Resolver y validar el token UNA sola vez.
+  # Se propaga como variable secreta de pipeline (GH_TOKEN)
+  # para que todos los steps siguientes la consuman sin volver
+  # a tocar el Variable Group.
+  # ============================================================
   - powershell: |
+      $ErrorActionPreference = "Stop"
+
       $token = "$(GITHUB_TOKEN)"
-      Write-Host "Longitud del token: $($token.Length)"
-      Write-Host "Primeros 4 caracteres: $($token.Substring(0, [Math]::Min(4, $token.Length)))"
-      Write-Host "Es nulo o vacío: $([string]::IsNullOrWhiteSpace($token))"
-      Write-Host "Valor literal enmascarado por Azure DevOps: ***"
-    displayName: "DEBUG — Ver estado del token"
+
+      Write-Host "Longitud del token  : $($token.Length)"
+      Write-Host "Primeros 4 chars    : $($token.Substring(0, [Math]::Min(4, $token.Length)))"
+      Write-Host "Es nulo o vacio     : $([string]::IsNullOrWhiteSpace($token))"
+
+      # Cuando Azure DevOps no puede inyectar la variable (sin permisos al Variable Group),
+      # PowerShell recibe la cadena literal "$(GITHUB_TOKEN)" sin expandir.
+      if ([string]::IsNullOrWhiteSpace($token) -or $token -eq "$(GITHUB_TOKEN)") {
+          throw "GITHUB_TOKEN no fue inyectado. Verifica que el Variable Group 'github-secrets' existe en Azure DevOps Library y que este pipeline tiene permisos: Library -> github-secrets -> Pipeline permissions -> agrega este pipeline."
+      }
+
+      # Propagar el token resuelto como variable secreta de pipeline.
+      # A partir de aqui TODOS los steps usan $(GH_TOKEN) — no $(GITHUB_TOKEN).
+      Write-Host "##vso[task.setvariable variable=GH_TOKEN;issecret=true]$token"
+      Write-Host "Token resuelto y propagado correctamente como GH_TOKEN."
+    displayName: "DEBUG — Resolver token y propagar a pipeline"
 
   # ============================================================
-  # 0. PREFLIGHT — Verificar herramientas, permisos y tokens
+  # 0. PREFLIGHT — Verificar herramientas, permisos y token
   # ============================================================
   - powershell: |
       $ErrorActionPreference = "Stop"
       $errores = @()
+
+      # Desde este step en adelante se usa GH_TOKEN, resuelto en el paso anterior.
+      $token = "$(GH_TOKEN)"
 
       Write-Host "========================================================"
       Write-Host "PREFLIGHT — Verificacion previa al pipeline"
@@ -78,90 +104,74 @@ steps:
           $errores += "Git no esta instalado o no esta en el PATH del agente."
       }
 
-      # --- Verificacion 2: El token existe y no esta vacio ---
-      # FIX: Se eliminó el backtick del escape para que la comparación con la
-      #      cadena literal "$(GITHUB_TOKEN)" funcione correctamente en PowerShell.
-      #      Cuando Azure DevOps NO inyecta la variable, PowerShell recibe la cadena
-      #      literal "$(GITHUB_TOKEN)" sin expandir. Esta comparación la detecta.
-      Write-Host ""
-      Write-Host "Verificando token de GitHub..."
-      $token = "$(GITHUB_TOKEN)"
-
-      if ([string]::IsNullOrWhiteSpace($token) -or $token -eq "$(GITHUB_TOKEN)") {
-          $errores += "GITHUB_TOKEN esta vacio o no fue inyectado. Verifica que el Variable Group 'github-secrets' existe en Azure DevOps Library y que este pipeline tiene permisos para accederlo (Library -> github-secrets -> Pipeline permissions)."
-      }
-      else {
-          Write-Host "   OK GITHUB_TOKEN presente (longitud: $($token.Length) caracteres)"
-      }
-
-      # --- Verificacion 3: El token es valido contra la API de GitHub ---
+      # --- Verificacion 2: El token es valido contra la API de GitHub ---
       Write-Host ""
       Write-Host "Verificando autenticacion con GitHub..."
-      if (-not [string]::IsNullOrWhiteSpace($token) -and $token -ne "$(GITHUB_TOKEN)") {
-          try {
-              $headers = @{
-                  Authorization = "Bearer $token"
-                  Accept        = "application/vnd.github+json"
-              }
-
-              $userResponse = Invoke-RestMethod `
-                  -Uri "https://api.github.com/user" `
-                  -Headers $headers
-
-              Write-Host "   OK Token valido — Usuario autenticado: $($userResponse.login)"
-              Write-Host "   INFO Tipo de cuenta: $($userResponse.type)"
+      try {
+          $headers = @{
+              Authorization = "Bearer $token"
+              Accept        = "application/vnd.github+json"
           }
-          catch {
-              $errores += "El token de GitHub no es valido o esta expirado. Error: $($_.Exception.Message)"
-          }
+
+          $userResponse = Invoke-RestMethod `
+              -Uri "https://api.github.com/user" `
+              -Headers $headers
+
+          Write-Host "   OK Token valido — Usuario autenticado: $($userResponse.login)"
+          Write-Host "   INFO Tipo de cuenta: $($userResponse.type)"
+      }
+      catch {
+          $errores += "El token de GitHub no es valido o esta expirado. Error: $($_.Exception.Message)"
       }
 
-      # --- Verificacion 4: Scopes del token (permisos) ---
+      # --- Verificacion 3: Scopes del token (permisos) ---
       Write-Host ""
       Write-Host "Verificando scopes (permisos) del token..."
-      if (-not [string]::IsNullOrWhiteSpace($token) -and $token -ne "$(GITHUB_TOKEN)") {
-          try {
-              $headers = @{
-                  Authorization = "Bearer $token"
-                  Accept        = "application/vnd.github+json"
-              }
-
-              $webResponse = Invoke-WebRequest `
-                  -Uri "https://api.github.com/user" `
-                  -Headers $headers
-
-              $scopes = $webResponse.Headers["X-OAuth-Scopes"]
-
-              if ([string]::IsNullOrWhiteSpace($scopes)) {
-                  Write-Host "   AVISO No se pudieron leer los scopes (puede ser un Fine-grained token)."
-                  Write-Host "   INFO Si usas Fine-grained token, asegurate de tener: Contents (RW), Metadata (R), Administration (RW)"
-              }
-              else {
-                  Write-Host "   INFO Scopes detectados: $scopes"
-
-                  $scopeList = $scopes -split ",\s*"
-
-                  if ($scopeList -notcontains "repo") {
-                      $errores += "El token NO tiene el scope 'repo'. Es necesario para crear repositorios y hacer push."
-                  } else {
-                      Write-Host "   OK Scope 'repo' presente"
-                  }
-
-                  if ($scopeList -notcontains "delete_repo") {
-                      $errores += "El token NO tiene el scope 'delete_repo'. Es necesario para el rollback automatico."
-                  } else {
-                      Write-Host "   OK Scope 'delete_repo' presente"
-                  }
-              }
+      try {
+          $headers = @{
+              Authorization = "Bearer $token"
+              Accept        = "application/vnd.github+json"
           }
-          catch {
-              $errores += "No se pudo verificar los scopes del token. Error: $($_.Exception.Message)"
+
+          $webResponse = Invoke-WebRequest `
+              -Uri "https://api.github.com/user" `
+              -Headers $headers
+
+          $scopes = $webResponse.Headers["X-OAuth-Scopes"]
+
+          if ([string]::IsNullOrWhiteSpace($scopes)) {
+              Write-Host "   AVISO No se pudieron leer los scopes (puede ser un Fine-grained token)."
+              Write-Host "   INFO Si usas Fine-grained token, asegurate de tener: Contents (RW), Metadata (R), Administration (RW)"
+          }
+          else {
+              Write-Host "   INFO Scopes detectados: $scopes"
+              $scopeList = $scopes -split ",\s*"
+
+              if ($scopeList -notcontains "repo") {
+                  $errores += "El token NO tiene el scope 'repo'. Es necesario para crear repositorios y hacer push."
+              } else {
+                  Write-Host "   OK Scope 'repo' presente"
+              }
+
+              if ($scopeList -notcontains "delete_repo") {
+                  $errores += "El token NO tiene el scope 'delete_repo'. Es necesario para el rollback automatico."
+              } else {
+                  Write-Host "   OK Scope 'delete_repo' presente"
+              }
           }
       }
+      catch {
+          $errores += "No se pudo verificar los scopes del token. Error: $($_.Exception.Message)"
+      }
 
-      # --- Verificacion 5: Acceso a los repos template ---
+      # --- Verificacion 4: Acceso a los repos template ---
       Write-Host ""
       Write-Host "Verificando acceso a los repositorios template..."
+      $headers = @{
+          Authorization = "Bearer $token"
+          Accept        = "application/vnd.github+json"
+      }
+
       $templates = @(
           "Adrian-Bastidas/AqrGSprinboot",
           "Adrian-Bastidas/ArqGReact",
@@ -169,34 +179,18 @@ steps:
           "Adrian-Bastidas/ArqGNode"
       )
 
-      if (-not [string]::IsNullOrWhiteSpace($token) -and $token -ne "$(GITHUB_TOKEN)") {
-          $headers = @{
-              Authorization = "Bearer $token"
-              Accept        = "application/vnd.github+json"
+      foreach ($repo in $templates) {
+          try {
+              $repoInfo = Invoke-RestMethod `
+                  -Uri "https://api.github.com/repos/$repo" `
+                  -Headers $headers
+
+              Write-Host "   OK Acceso OK: $repo ($($repoInfo.visibility))"
           }
-
-          foreach ($repo in $templates) {
-              try {
-                  $repoInfo = Invoke-RestMethod `
-                      -Uri "https://api.github.com/repos/$repo" `
-                      -Headers $headers
-
-                  Write-Host "   OK Acceso OK: $repo ($($repoInfo.visibility))"
-              }
-              catch {
-                  $errores += "No se puede acceder al repo template '$repo'. Verifica que existe y que el token tiene acceso. Error: $($_.Exception.Message)"
-              }
+          catch {
+              $errores += "No se puede acceder al repo template '$repo'. Error: $($_.Exception.Message)"
           }
       }
-
-      # --- Verificacion 6: Info sobre branch protection ---
-      Write-Host ""
-      Write-Host "INFO Branch protection rules:"
-      Write-Host "   Las branch protection rules requieren scope 'repo' completo"
-      Write-Host "   y que el usuario sea OWNER o ADMIN del repositorio."
-      Write-Host "   Si el pipeline falla en 403 al proteger ramas, actualiza el PAT en:"
-      Write-Host "   GitHub -> Settings -> Developer settings -> Personal access tokens"
-      Write-Host "   Scopes necesarios: repo (completo) + delete_repo"
 
       # --- Resultado final del preflight ---
       Write-Host ""
@@ -206,7 +200,6 @@ steps:
           foreach ($e in $errores) {
               Write-Host "##vso[task.logissue type=error]   -> $e"
           }
-          Write-Host "##vso[task.logissue type=error]Corrige los problemas anteriores antes de volver a ejecutar el pipeline."
           throw "Preflight fallido. El pipeline no continuara hasta que todos los checks pasen."
       }
       else {
@@ -231,7 +224,7 @@ steps:
           throw "El nombre excede los 100 caracteres permitidos por GitHub. Longitud actual: $($repoName.Length)"
       }
       if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') {
-          throw "El nombre '$repoName' contiene caracteres no permitidos. Solo se permiten: letras (a-z, A-Z), numeros (0-9), guiones (-), guiones bajos (_) y puntos (.)"
+          throw "El nombre '$repoName' contiene caracteres no permitidos. Solo se permiten: letras, numeros, guiones (-), guiones bajos (_) y puntos (.)"
       }
       if ($repoName.StartsWith('.') -or $repoName.EndsWith('.')) {
           throw "El nombre no puede empezar ni terminar con un punto (.)"
@@ -240,7 +233,7 @@ steps:
           throw "El nombre no puede empezar ni terminar con un guion (-)"
       }
       if ($repoName -match '\s') {
-          throw "El nombre no puede contener espacios. Usa guiones (-) o guiones bajos (_) en su lugar."
+          throw "El nombre no puede contener espacios."
       }
 
       $reservedNames = @(
@@ -290,8 +283,9 @@ steps:
   - powershell: |
       $ErrorActionPreference = "Stop"
 
+      $token   = "$(GH_TOKEN)"
       $headers = @{
-          Authorization = "Bearer $(GITHUB_TOKEN)"
+          Authorization = "Bearer $token"
           Accept        = "application/vnd.github+json"
       }
 
@@ -319,8 +313,7 @@ steps:
           Write-Host "##vso[task.setvariable variable=repoCreado]true"
       }
       catch {
-          $errorDetail = $_.Exception.Message
-          throw "No se pudo crear el repositorio en GitHub. Detalle: $errorDetail"
+          throw "No se pudo crear el repositorio en GitHub. Detalle: $($_.Exception.Message)"
       }
     displayName: "Crear repositorio en GitHub"
 
@@ -330,9 +323,9 @@ steps:
   - powershell: |
       $ErrorActionPreference = "Stop"
 
+      $token            = "$(GH_TOKEN)"
       $templateRepo     = "$(templateRepo)"
       $newRepoUrl       = "$(newRepoUrl)"
-      $token            = "$(GITHUB_TOKEN)"
       $authenticatedUrl = $newRepoUrl -replace "https://", "https://$token@"
 
       # Limpiar carpeta temporal si existe de una ejecucion previa
@@ -368,8 +361,7 @@ steps:
           Write-Host "OK Ramas 'main' y 'develop' creadas correctamente"
       }
       catch {
-          $errorDetail = $_.Exception.Message
-          throw "Fallo al subir el codigo al nuevo repositorio. Detalle: $errorDetail"
+          throw "Fallo al subir el codigo al nuevo repositorio. Detalle: $($_.Exception.Message)"
       }
     displayName: "Copiar template y crear ramas"
 
@@ -379,8 +371,9 @@ steps:
   - powershell: |
       $ErrorActionPreference = "Stop"
 
+      $token   = "$(GH_TOKEN)"
       $headers = @{
-          Authorization = "Bearer $(GITHUB_TOKEN)"
+          Authorization = "Bearer $token"
           Accept        = "application/vnd.github+json"
       }
 
@@ -412,8 +405,7 @@ steps:
           Write-Host "OK Rama main protegida"
       }
       catch {
-          $errorDetail = $_.Exception.Message
-          throw "No se pudo proteger la rama main. Detalle: $errorDetail"
+          throw "No se pudo proteger la rama main. Detalle: $($_.Exception.Message)"
       }
     displayName: "Proteger rama main"
 
@@ -423,8 +415,9 @@ steps:
   - powershell: |
       $ErrorActionPreference = "Stop"
 
+      $token   = "$(GH_TOKEN)"
       $headers = @{
-          Authorization = "Bearer $(GITHUB_TOKEN)"
+          Authorization = "Bearer $token"
           Accept        = "application/vnd.github+json"
       }
 
@@ -455,22 +448,21 @@ steps:
           Write-Host "OK Rama develop protegida"
       }
       catch {
-          $errorDetail = $_.Exception.Message
-          throw "No se pudo proteger la rama develop. Detalle: $errorDetail"
+          throw "No se pudo proteger la rama develop. Detalle: $($_.Exception.Message)"
       }
     displayName: "Proteger rama develop"
 
   # ============================================================
-  # 7. VALIDAR GENERACIÓN EXITOSA
+  # 7. VALIDAR GENERACION EXITOSA
   # ============================================================
   - powershell: |
       $ErrorActionPreference = "Stop"
 
-      $headers = @{
-          Authorization = "Bearer $(GITHUB_TOKEN)"
+      $token        = "$(GH_TOKEN)"
+      $headers      = @{
+          Authorization = "Bearer $token"
           Accept        = "application/vnd.github+json"
       }
-
       $repoFullName = "$(newRepoFullName)"
       $errores      = @()
 
@@ -563,8 +555,9 @@ steps:
 
       Write-Host "##vso[task.logissue type=error]El pipeline fallo. Iniciando rollback..."
 
+      $token   = "$(GH_TOKEN)"
       $headers = @{
-          Authorization = "Bearer $(GITHUB_TOKEN)"
+          Authorization = "Bearer $token"
           Accept        = "application/vnd.github+json"
       }
 
