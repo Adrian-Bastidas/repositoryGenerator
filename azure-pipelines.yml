@@ -412,9 +412,11 @@ jobs:
     displayName: "Job 4 · Protección de ramas (best-effort)"
     pool:
       name: Default
-    dependsOn: AplicarTemplateYSubirCodigo
+    dependsOn:
+      - AplicarTemplateYSubirCodigo
+      - CreacionRepositorio
     variables:
-      newRepoFullName: $[ dependencies.AplicarTemplateYSubirCodigo.outputs['CrearRepo.newRepoFullName'] ]
+      newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
     steps:
       - powershell: |
           $headers = @{
