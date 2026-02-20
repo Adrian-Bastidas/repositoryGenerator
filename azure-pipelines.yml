@@ -62,51 +62,88 @@ jobs:
           Write-Host "✅ git: $(git --version)"
 
           # ── Python ───────────────────────────────────────────────
-          Write-Host "🔍 Verificando Python..."
+          Write-Host "🔍 Buscando Python en el sistema..."
 
-          # Buscar python en rutas comunes de Windows si no está en PATH
+          # Rutas donde puede estar Python en Windows (PATH + instalaciones típicas)
           $pythonCandidates = @(
-            "python",
-            "python3",
-            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
-            "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe",
-            "$env:LOCALAPPDATA\Programs\Python\Python39\python.exe",
-            "C:\Python312\python.exe",
             "C:\Python311\python.exe",
+            "C:\Python312\python.exe",
             "C:\Python310\python.exe",
             "C:\Python39\python.exe",
-            "C:\Program Files\Python312\python.exe",
             "C:\Program Files\Python311\python.exe",
-            "C:\Program Files\Python310\python.exe"
+            "C:\Program Files\Python312\python.exe",
+            "C:\Program Files\Python310\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python39\python.exe"
           )
 
           $pythonExe = $null
+
+          # Probar rutas absolutas primero (evita el stub de Microsoft Store)
           foreach ($candidate in $pythonCandidates) {
-            try {
+            if (Test-Path $candidate) {
               $ver = & $candidate --version 2>&1
-              if ($LASTEXITCODE -eq 0 -and $ver -match "Python 3") {
+              if ($LASTEXITCODE -eq 0 -and "$ver" -match "Python 3") {
                 $pythonExe = $candidate
-                Write-Host "✅ Python encontrado: $candidate — $ver"
+                Write-Host "✅ Python encontrado en: $candidate — $ver"
                 break
               }
-            } catch { }
+            }
           }
 
+          # Si no se encontró en rutas absolutas, buscar en PATH ignorando stubs
           if (-not $pythonExe) {
-            Write-Host "⚙️ Python no encontrado. Instalando via winget..."
-            winget install --id Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements
-            if ($LASTEXITCODE -ne 0) { throw "Error instalando Python via winget" }
-
-            # Refrescar PATH tras instalación
-            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
-                        [System.Environment]::GetEnvironmentVariable("PATH", "User")
-
-            $pythonExe = "python"
-            Write-Host "✅ Python instalado correctamente"
+            $fromPath = Get-Command python -ErrorAction SilentlyContinue
+            if ($fromPath) {
+              # Filtrar el stub de Microsoft Store (WindowsApps)
+              if ($fromPath.Source -notmatch "WindowsApps") {
+                $ver = & $fromPath.Source --version 2>&1
+                if ($LASTEXITCODE -eq 0 -and "$ver" -match "Python 3") {
+                  $pythonExe = $fromPath.Source
+                  Write-Host "✅ Python encontrado en PATH: $($fromPath.Source) — $ver"
+                }
+              } else {
+                Write-Host "⚠️ 'python' en PATH es el stub de Microsoft Store, ignorando..."
+              }
+            }
           }
 
-          # Exportar la ruta de python para los siguientes steps
+          # Si sigue sin encontrarse, descargar e instalar desde python.org
+          if (-not $pythonExe) {
+            Write-Host "⚙️ Python no encontrado. Descargando Python 3.11 desde python.org..."
+
+            $installer    = "$env:TEMP\python-installer.exe"
+            $installDir   = "C:\Python311"
+            $downloadUrl  = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+
+            Write-Host "⬇️ Descargando: $downloadUrl"
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $installer -UseBasicParsing
+            if (-not (Test-Path $installer)) { throw "No se pudo descargar el instalador de Python" }
+
+            Write-Host "📦 Instalando Python en $installDir ..."
+            Start-Process -FilePath $installer -ArgumentList @(
+              "/quiet",
+              "InstallAllUsers=0",
+              "TargetDir=$installDir",
+              "PrependPath=0",       # No tocar el PATH global para no romper el agente
+              "Include_pip=1",
+              "Include_launcher=0"
+            ) -Wait -NoNewWindow
+
+            if (-not (Test-Path "$installDir\python.exe")) {
+              throw "La instalación de Python falló. No se encontró $installDir\python.exe"
+            }
+
+            $pythonExe = "$installDir\python.exe"
+            $ver = & $pythonExe --version 2>&1
+            Write-Host "✅ Python instalado correctamente: $ver"
+
+            # Limpiar instalador
+            Remove-Item $installer -Force -ErrorAction SilentlyContinue
+          }
+
           Write-Host "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$pythonExe"
         displayName: "Verificar / instalar Python"
         name: CheckPython
@@ -115,23 +152,19 @@ jobs:
           $ErrorActionPreference = "Stop"
           $pythonExe = "$(CheckPython.PYTHON_EXE)"
 
-          Write-Host "🔍 Verificando pip..."
+          Write-Host "🔍 Verificando pip con: $pythonExe"
           $pipVer = & $pythonExe -m pip --version 2>&1
-          if ($LASTEXITCODE -ne 0) { throw "pip no disponible para $pythonExe" }
+          if ($LASTEXITCODE -ne 0) { throw "pip no disponible. Detalle: $pipVer" }
           Write-Host "✅ pip: $pipVer"
 
           Write-Host "🍪 Instalando / actualizando Cookiecutter..."
           & $pythonExe -m pip install --upgrade cookiecutter --quiet
           if ($LASTEXITCODE -ne 0) { throw "Error instalando Cookiecutter" }
 
-          # Verificar que cookiecutter quedó accesible
+          # Verificar instalación
           $ccVer = & $pythonExe -m cookiecutter --version 2>&1
           Write-Host "✅ Cookiecutter listo: $ccVer"
 
-          # Exportar el comando canónico para invocar cookiecutter en otros jobs
-          # Siempre via "python -m cookiecutter" para evitar problemas de PATH en Windows
-          $cookiecutterCmd = "$pythonExe -m cookiecutter"
-          Write-Host "##vso[task.setvariable variable=COOKIECUTTER_CMD;isOutput=true]$cookiecutterCmd"
           Write-Host "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$pythonExe"
         displayName: "Instalar Cookiecutter"
         name: InstalarCookiecutter
