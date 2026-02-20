@@ -52,7 +52,7 @@ steps:
       Write-Host "Longitud del token: $($token.Length)"
       Write-Host "Primeros 4 caracteres: $($token.Substring(0, [Math]::Min(4, $token.Length)))"
       Write-Host "Es nulo o vacío: $([string]::IsNullOrWhiteSpace($token))"
-      Write-Host "Valor literal sin expandir: $(GITHUB_TOKEN)"
+      Write-Host "Valor literal enmascarado por Azure DevOps: ***"
     displayName: "DEBUG — Ver estado del token"
 
   # ============================================================
@@ -63,33 +63,41 @@ steps:
       $errores = @()
 
       Write-Host "========================================================"
-      Write-Host "🔍 PREFLIGHT — Verificación previa al pipeline"
+      Write-Host "PREFLIGHT — Verificacion previa al pipeline"
       Write-Host "========================================================"
 
-      # --- Verificación 1: Git instalado ---
-      Write-Host "`n🔧 Verificando herramientas del agente..."
+      # --- Verificacion 1: Git instalado ---
+      Write-Host ""
+      Write-Host "Verificando herramientas del agente..."
       try {
           $gitVersion = git --version
           if ($LASTEXITCODE -ne 0) { throw "Git no responde correctamente." }
-          Write-Host "   ✅ Git disponible: $gitVersion"
+          Write-Host "   OK Git disponible: $gitVersion"
       }
       catch {
-          $errores += "Git no está instalado o no está en el PATH del agente."
+          $errores += "Git no esta instalado o no esta en el PATH del agente."
       }
 
-      # --- Verificación 2: El token existe y no está vacío ---
-      Write-Host "`n🔑 Verificando token de GitHub..."
+      # --- Verificacion 2: El token existe y no esta vacio ---
+      # FIX: Se eliminó el backtick del escape para que la comparación con la
+      #      cadena literal "$(GITHUB_TOKEN)" funcione correctamente en PowerShell.
+      #      Cuando Azure DevOps NO inyecta la variable, PowerShell recibe la cadena
+      #      literal "$(GITHUB_TOKEN)" sin expandir. Esta comparación la detecta.
+      Write-Host ""
+      Write-Host "Verificando token de GitHub..."
       $token = "$(GITHUB_TOKEN)"
-      if ([string]::IsNullOrWhiteSpace($token) -or $token -eq "`$(GITHUB_TOKEN)") {
-          $errores += "GITHUB_TOKEN está vacío o no fue inyectado. Verifica el Variable Group 'github-secrets' en Azure DevOps."
+
+      if ([string]::IsNullOrWhiteSpace($token) -or $token -eq "$(GITHUB_TOKEN)") {
+          $errores += "GITHUB_TOKEN esta vacio o no fue inyectado. Verifica que el Variable Group 'github-secrets' existe en Azure DevOps Library y que este pipeline tiene permisos para accederlo (Library -> github-secrets -> Pipeline permissions)."
       }
       else {
-          Write-Host "   ✅ GITHUB_TOKEN presente (longitud: $($token.Length) caracteres)"
+          Write-Host "   OK GITHUB_TOKEN presente (longitud: $($token.Length) caracteres)"
       }
 
-      # --- Verificación 3: El token es válido contra la API de GitHub ---
-      Write-Host "`n🌐 Verificando autenticación con GitHub..."
-      if (-not [string]::IsNullOrWhiteSpace($token) -and $token -ne "`$(GITHUB_TOKEN)") {
+      # --- Verificacion 3: El token es valido contra la API de GitHub ---
+      Write-Host ""
+      Write-Host "Verificando autenticacion con GitHub..."
+      if (-not [string]::IsNullOrWhiteSpace($token) -and $token -ne "$(GITHUB_TOKEN)") {
           try {
               $headers = @{
                   Authorization = "Bearer $token"
@@ -100,17 +108,18 @@ steps:
                   -Uri "https://api.github.com/user" `
                   -Headers $headers
 
-              Write-Host "   ✅ Token válido — Usuario autenticado: $($userResponse.login)"
-              Write-Host "   ℹ️  Tipo de cuenta: $($userResponse.type)"
+              Write-Host "   OK Token valido — Usuario autenticado: $($userResponse.login)"
+              Write-Host "   INFO Tipo de cuenta: $($userResponse.type)"
           }
           catch {
-              $errores += "El token de GitHub no es válido o está expirado. Error: $($_.Exception.Message)"
+              $errores += "El token de GitHub no es valido o esta expirado. Error: $($_.Exception.Message)"
           }
       }
 
-      # --- Verificación 4: Scopes del token (permisos) ---
-      Write-Host "`n🛡️  Verificando scopes (permisos) del token..."
-      if (-not [string]::IsNullOrWhiteSpace($token) -and $token -ne "`$(GITHUB_TOKEN)") {
+      # --- Verificacion 4: Scopes del token (permisos) ---
+      Write-Host ""
+      Write-Host "Verificando scopes (permisos) del token..."
+      if (-not [string]::IsNullOrWhiteSpace($token) -and $token -ne "$(GITHUB_TOKEN)") {
           try {
               $headers = @{
                   Authorization = "Bearer $token"
@@ -124,26 +133,24 @@ steps:
               $scopes = $webResponse.Headers["X-OAuth-Scopes"]
 
               if ([string]::IsNullOrWhiteSpace($scopes)) {
-                  Write-Host "   ⚠️  No se pudieron leer los scopes (puede ser un Fine-grained token)."
-                  Write-Host "   ℹ️  Si usas Fine-grained token, asegúrate de tener: Contents (RW), Metadata (R), Administration (RW)"
+                  Write-Host "   AVISO No se pudieron leer los scopes (puede ser un Fine-grained token)."
+                  Write-Host "   INFO Si usas Fine-grained token, asegurate de tener: Contents (RW), Metadata (R), Administration (RW)"
               }
               else {
-                  Write-Host "   ℹ️  Scopes detectados: $scopes"
+                  Write-Host "   INFO Scopes detectados: $scopes"
 
                   $scopeList = $scopes -split ",\s*"
 
-                  # Verificar scope 'repo' (requerido para crear repos y push)
                   if ($scopeList -notcontains "repo") {
                       $errores += "El token NO tiene el scope 'repo'. Es necesario para crear repositorios y hacer push."
                   } else {
-                      Write-Host "   ✅ Scope 'repo' presente"
+                      Write-Host "   OK Scope 'repo' presente"
                   }
 
-                  # Verificar scope 'delete_repo' (requerido para rollback)
                   if ($scopeList -notcontains "delete_repo") {
-                      $errores += "El token NO tiene el scope 'delete_repo'. Es necesario para el rollback automático."
+                      $errores += "El token NO tiene el scope 'delete_repo'. Es necesario para el rollback automatico."
                   } else {
-                      Write-Host "   ✅ Scope 'delete_repo' presente"
+                      Write-Host "   OK Scope 'delete_repo' presente"
                   }
               }
           }
@@ -152,8 +159,9 @@ steps:
           }
       }
 
-      # --- Verificación 5: Acceso a los repos template ---
-      Write-Host "`n📦 Verificando acceso a los repositorios template..."
+      # --- Verificacion 5: Acceso a los repos template ---
+      Write-Host ""
+      Write-Host "Verificando acceso a los repositorios template..."
       $templates = @(
           "Adrian-Bastidas/AqrGSprinboot",
           "Adrian-Bastidas/ArqGReact",
@@ -161,7 +169,7 @@ steps:
           "Adrian-Bastidas/ArqGNode"
       )
 
-      if (-not [string]::IsNullOrWhiteSpace($token) -and $token -ne "`$(GITHUB_TOKEN)") {
+      if (-not [string]::IsNullOrWhiteSpace($token) -and $token -ne "$(GITHUB_TOKEN)") {
           $headers = @{
               Authorization = "Bearer $token"
               Accept        = "application/vnd.github+json"
@@ -173,7 +181,7 @@ steps:
                       -Uri "https://api.github.com/repos/$repo" `
                       -Headers $headers
 
-                  Write-Host "   ✅ Acceso OK: $repo ($($repoInfo.visibility))"
+                  Write-Host "   OK Acceso OK: $repo ($($repoInfo.visibility))"
               }
               catch {
                   $errores += "No se puede acceder al repo template '$repo'. Verifica que existe y que el token tiene acceso. Error: $($_.Exception.Message)"
@@ -181,26 +189,28 @@ steps:
           }
       }
 
-      # --- Verificación 6: Permisos de admin en el usuario (necesario para branch protection) ---
-      Write-Host "`n🔐 Verificando capacidad de aplicar branch protection rules..."
-      Write-Host "   ℹ️  Las branch protection rules requieren que el token tenga scope 'repo' completo"
-      Write-Host "      y que el usuario sea OWNER o ADMIN del repositorio donde se aplicarán."
-      Write-Host "   ℹ️  Si el pipeline falla en 403 al proteger ramas, actualiza el PAT en:"
-      Write-Host "      GitHub → Settings → Developer settings → Personal access tokens"
-      Write-Host "      Scopes necesarios: ✅ repo (completo)  ✅ delete_repo"
+      # --- Verificacion 6: Info sobre branch protection ---
+      Write-Host ""
+      Write-Host "INFO Branch protection rules:"
+      Write-Host "   Las branch protection rules requieren scope 'repo' completo"
+      Write-Host "   y que el usuario sea OWNER o ADMIN del repositorio."
+      Write-Host "   Si el pipeline falla en 403 al proteger ramas, actualiza el PAT en:"
+      Write-Host "   GitHub -> Settings -> Developer settings -> Personal access tokens"
+      Write-Host "   Scopes necesarios: repo (completo) + delete_repo"
 
       # --- Resultado final del preflight ---
-      Write-Host "`n========================================================"
+      Write-Host ""
+      Write-Host "========================================================"
       if ($errores.Count -gt 0) {
-          Write-Host "##vso[task.logissue type=error]❌ PREFLIGHT FALLIDO — Se encontraron $($errores.Count) problema(s):"
+          Write-Host "##vso[task.logissue type=error]PREFLIGHT FALLIDO — Se encontraron $($errores.Count) problema(s):"
           foreach ($e in $errores) {
-              Write-Host "##vso[task.logissue type=error]   → $e"
+              Write-Host "##vso[task.logissue type=error]   -> $e"
           }
           Write-Host "##vso[task.logissue type=error]Corrige los problemas anteriores antes de volver a ejecutar el pipeline."
-          throw "Preflight fallido. El pipeline no continuará hasta que todos los checks pasen."
+          throw "Preflight fallido. El pipeline no continuara hasta que todos los checks pasen."
       }
       else {
-          Write-Host "✅ PREFLIGHT EXITOSO — Todas las verificaciones pasaron."
+          Write-Host "PREFLIGHT EXITOSO — Todas las verificaciones pasaron."
           Write-Host "========================================================"
       }
     displayName: "PREFLIGHT — Verificar herramientas, permisos y tokens"
@@ -215,19 +225,19 @@ steps:
       Write-Host "Validando nombre: '$repoName'"
 
       if ([string]::IsNullOrWhiteSpace($repoName)) {
-          throw "El nombre del repositorio no puede estar vacío."
+          throw "El nombre del repositorio no puede estar vacio."
       }
       if ($repoName.Length -gt 100) {
           throw "El nombre excede los 100 caracteres permitidos por GitHub. Longitud actual: $($repoName.Length)"
       }
       if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') {
-          throw "El nombre '$repoName' contiene caracteres no permitidos. Solo se permiten: letras (a-z, A-Z), números (0-9), guiones (-), guiones bajos (_) y puntos (.)"
+          throw "El nombre '$repoName' contiene caracteres no permitidos. Solo se permiten: letras (a-z, A-Z), numeros (0-9), guiones (-), guiones bajos (_) y puntos (.)"
       }
       if ($repoName.StartsWith('.') -or $repoName.EndsWith('.')) {
           throw "El nombre no puede empezar ni terminar con un punto (.)"
       }
       if ($repoName.StartsWith('-') -or $repoName.EndsWith('-')) {
-          throw "El nombre no puede empezar ni terminar con un guión (-)"
+          throw "El nombre no puede empezar ni terminar con un guion (-)"
       }
       if ($repoName -match '\s') {
           throw "El nombre no puede contener espacios. Usa guiones (-) o guiones bajos (_) en su lugar."
@@ -242,10 +252,10 @@ steps:
           throw "El nombre '$repoName' es un nombre reservado y no puede usarse."
       }
       if ($repoName -match '^\.+$') {
-          throw "El nombre no puede estar compuesto únicamente por puntos."
+          throw "El nombre no puede estar compuesto unicamente por puntos."
       }
 
-      Write-Host "✅ Nombre '$repoName' válido."
+      Write-Host "OK Nombre '$repoName' valido."
     displayName: "Validar nombre del repositorio"
 
   # ============================================================
@@ -271,7 +281,7 @@ steps:
           throw "Template '$template' no reconocido."
       }
 
-      Write-Host "✅ Template seleccionado: $template"
+      Write-Host "OK Template seleccionado: $template"
     displayName: "Seleccionar template"
 
   # ============================================================
@@ -303,7 +313,7 @@ steps:
               -Body $body `
               -ContentType "application/json"
 
-          Write-Host "✅ Repositorio creado: $($response.html_url)"
+          Write-Host "OK Repositorio creado: $($response.html_url)"
           Write-Host "##vso[task.setvariable variable=newRepoUrl]$($response.clone_url)"
           Write-Host "##vso[task.setvariable variable=newRepoFullName]$($response.full_name)"
           Write-Host "##vso[task.setvariable variable=repoCreado]true"
@@ -324,6 +334,13 @@ steps:
       $newRepoUrl       = "$(newRepoUrl)"
       $token            = "$(GITHUB_TOKEN)"
       $authenticatedUrl = $newRepoUrl -replace "https://", "https://$token@"
+
+      # Limpiar carpeta temporal si existe de una ejecucion previa
+      $tempFolder = "$(Agent.BuildDirectory)\template-repo"
+      if (Test-Path $tempFolder) {
+          Remove-Item -Recurse -Force $tempFolder
+          Write-Host "INFO Carpeta temporal previa limpiada."
+      }
 
       try {
           Write-Host "Clonando template: $templateRepo"
@@ -348,11 +365,11 @@ steps:
           if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de develop." }
 
           Write-Host "##vso[task.setvariable variable=codigoSubido]true"
-          Write-Host "✅ Ramas 'main' y 'develop' creadas correctamente"
+          Write-Host "OK Ramas 'main' y 'develop' creadas correctamente"
       }
       catch {
           $errorDetail = $_.Exception.Message
-          throw "Fallo al subir el código al nuevo repositorio. Detalle: $errorDetail"
+          throw "Fallo al subir el codigo al nuevo repositorio. Detalle: $errorDetail"
       }
     displayName: "Copiar template y crear ramas"
 
@@ -382,7 +399,7 @@ steps:
       } | ConvertTo-Json -Depth 5
 
       try {
-          Write-Host "Aplicando protección a rama: main"
+          Write-Host "Aplicando proteccion a rama: main"
 
           Invoke-RestMethod `
               -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/main/protection" `
@@ -392,7 +409,7 @@ steps:
               -ContentType "application/json"
 
           Write-Host "##vso[task.setvariable variable=mainProtegida]true"
-          Write-Host "✅ Rama main protegida"
+          Write-Host "OK Rama main protegida"
       }
       catch {
           $errorDetail = $_.Exception.Message
@@ -426,7 +443,7 @@ steps:
       } | ConvertTo-Json -Depth 5
 
       try {
-          Write-Host "Aplicando protección a rama: develop"
+          Write-Host "Aplicando proteccion a rama: develop"
 
           Invoke-RestMethod `
               -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/develop/protection" `
@@ -435,7 +452,7 @@ steps:
               -Body $body `
               -ContentType "application/json"
 
-          Write-Host "✅ Rama develop protegida"
+          Write-Host "OK Rama develop protegida"
       }
       catch {
           $errorDetail = $_.Exception.Message
@@ -458,43 +475,46 @@ steps:
       $errores      = @()
 
       Write-Host "========================================"
-      Write-Host "🔍 Iniciando validación del repositorio"
+      Write-Host "Iniciando validacion del repositorio"
       Write-Host "========================================"
 
-      # Validación 1: El repo tiene archivos
-      Write-Host "`n📁 Validando contenido del repositorio..."
+      # Validacion 1: El repo tiene archivos
+      Write-Host ""
+      Write-Host "Validando contenido del repositorio..."
       try {
           $contents = Invoke-RestMethod `
               -Uri "https://api.github.com/repos/$repoFullName/contents" `
               -Headers $headers
 
           if ($contents.Count -eq 0) {
-              $errores += "El repositorio está vacío. El blueprint no se copió correctamente."
+              $errores += "El repositorio esta vacio. El blueprint no se copio correctamente."
           }
           else {
-              Write-Host "   ✅ El repositorio contiene $($contents.Count) archivo(s)/carpeta(s) en la raíz."
+              Write-Host "   OK El repositorio contiene $($contents.Count) archivo(s)/carpeta(s) en la raiz."
           }
       }
       catch {
           $errores += "No se pudo verificar el contenido. Detalle: $($_.Exception.Message)"
       }
 
-      # Validación 2: Ramas main y develop existen
-      Write-Host "`n🌿 Validando ramas..."
+      # Validacion 2: Ramas main y develop existen
+      Write-Host ""
+      Write-Host "Validando ramas..."
       foreach ($branch in @("main", "develop")) {
           try {
               Invoke-RestMethod `
                   -Uri "https://api.github.com/repos/$repoFullName/branches/$branch" `
                   -Headers $headers | Out-Null
-              Write-Host "   ✅ Rama '$branch' existe."
+              Write-Host "   OK Rama '$branch' existe."
           }
           catch {
               $errores += "La rama '$branch' no existe."
           }
       }
 
-      # Validación 3: Protecciones activas
-      Write-Host "`n🛡️  Validando protecciones de ramas..."
+      # Validacion 3: Protecciones activas
+      Write-Host ""
+      Write-Host "Validando protecciones de ramas..."
       foreach ($branch in @("main", "develop")) {
           try {
               $protection = Invoke-RestMethod `
@@ -506,41 +526,42 @@ steps:
               }
               else {
                   $approvals = $protection.required_pull_request_reviews.required_approving_review_count
-                  Write-Host "   ✅ Rama '$branch' protegida — aprobaciones mínimas: $approvals"
+                  Write-Host "   OK Rama '$branch' protegida — aprobaciones minimas: $approvals"
               }
 
               if ($protection.allow_force_pushes.enabled -eq $true) {
-                  $errores += "La rama '$branch' permite force push. Debería estar bloqueado."
+                  $errores += "La rama '$branch' permite force push. Deberia estar bloqueado."
               }
               else {
-                  Write-Host "   ✅ Rama '$branch' — Force push bloqueado."
+                  Write-Host "   OK Rama '$branch' — Force push bloqueado."
               }
           }
           catch {
-              $errores += "No se pudo verificar protección de '$branch'. Detalle: $($_.Exception.Message)"
+              $errores += "No se pudo verificar proteccion de '$branch'. Detalle: $($_.Exception.Message)"
           }
       }
 
-      Write-Host "`n========================================"
+      Write-Host ""
+      Write-Host "========================================"
       if ($errores.Count -gt 0) {
           foreach ($e in $errores) {
-              Write-Host "##vso[task.logissue type=error]   → $e"
+              Write-Host "##vso[task.logissue type=error]   -> $e"
           }
-          throw "La validación falló con $($errores.Count) problema(s)."
+          throw "La validacion fallo con $($errores.Count) problema(s)."
       }
       else {
-          Write-Host "✅ Todas las validaciones pasaron correctamente."
+          Write-Host "OK Todas las validaciones pasaron correctamente."
           Write-Host "========================================"
       }
-    displayName: "Validar generación del repositorio"
+    displayName: "Validar generacion del repositorio"
 
   # ============================================================
-  # ROLLBACK — Solo se ejecuta si algo falló
+  # ROLLBACK — Solo se ejecuta si algo fallo
   # ============================================================
   - powershell: |
       $ErrorActionPreference = "Stop"
 
-      Write-Host "##vso[task.logissue type=error]❌ El pipeline falló. Iniciando rollback..."
+      Write-Host "##vso[task.logissue type=error]El pipeline fallo. Iniciando rollback..."
 
       $headers = @{
           Authorization = "Bearer $(GITHUB_TOKEN)"
@@ -548,27 +569,27 @@ steps:
       }
 
       if ("$(repoCreado)" -eq "true") {
-          Write-Host "🗑️  Eliminando repositorio: $(newRepoFullName)"
+          Write-Host "Eliminando repositorio: $(newRepoFullName)"
           try {
               Invoke-RestMethod `
                   -Uri "https://api.github.com/repos/$(newRepoFullName)" `
                   -Method DELETE `
                   -Headers $headers
-              Write-Host "✅ Repositorio eliminado correctamente."
+              Write-Host "OK Repositorio eliminado correctamente."
           }
           catch {
-              Write-Host "##vso[task.logissue type=warning]⚠️ No se pudo eliminar el repositorio automáticamente."
-              Write-Host "##vso[task.logissue type=warning]   Elimínalo manualmente en: https://github.com/$(newRepoFullName)"
+              Write-Host "##vso[task.logissue type=warning]No se pudo eliminar el repositorio automaticamente."
+              Write-Host "##vso[task.logissue type=warning]   Eliminalo manualmente en: https://github.com/$(newRepoFullName)"
           }
       }
       else {
-          Write-Host "ℹ️  El repositorio no llegó a crearse. No hay nada que revertir."
+          Write-Host "INFO El repositorio no llego a crearse. No hay nada que revertir."
       }
 
       $tempFolder = "$(Agent.BuildDirectory)\template-repo"
       if (Test-Path $tempFolder) {
           Remove-Item -Recurse -Force $tempFolder
-          Write-Host "🧹 Carpeta temporal del agente limpiada."
+          Write-Host "OK Carpeta temporal del agente limpiada."
       }
 
       Write-Host "##vso[task.logissue type=error]Pipeline detenido. Revisa los errores arriba."
@@ -581,22 +602,22 @@ steps:
   # ============================================================
   - powershell: |
       Write-Host "============================================================"
-      Write-Host "✅ PoC 1 completado — Repositorio generado y validado"
+      Write-Host "OK PoC 1 completado — Repositorio generado y validado"
       Write-Host "============================================================"
-      Write-Host "📦 Template usado    : ${{ parameters.repoTemplate }}"
-      Write-Host "📁 Nuevo repo        : ${{ parameters.newRepoName }}"
-      Write-Host "🔒 Visibilidad       : ${{ parameters.repoVisibility }}"
-      Write-Host "🔗 URL               : $(newRepoUrl)"
-      Write-Host "🌿 Ramas             : main ✅  develop ✅"
-      Write-Host "🛡️  Protecciones     : main ✅  develop ✅"
-      Write-Host "📁 Contenido         : Blueprint copiado ✅"
+      Write-Host "Template usado    : ${{ parameters.repoTemplate }}"
+      Write-Host "Nuevo repo        : ${{ parameters.newRepoName }}"
+      Write-Host "Visibilidad       : ${{ parameters.repoVisibility }}"
+      Write-Host "URL               : $(newRepoUrl)"
+      Write-Host "Ramas             : main OK  develop OK"
+      Write-Host "Protecciones      : main OK  develop OK"
+      Write-Host "Contenido         : Blueprint copiado OK"
       Write-Host "------------------------------------------------------------"
-      Write-Host "🔒 Reglas activas    :"
-      Write-Host "   - Merge solo por Pull Request con 1 aprobación mínima"
-      Write-Host "   - Aprobaciones inválidas si hay nuevos commits"
+      Write-Host "Reglas activas:"
+      Write-Host "   - Merge solo por Pull Request con 1 aprobacion minima"
+      Write-Host "   - Aprobaciones invalidas si hay nuevos commits"
       Write-Host "   - Force push bloqueado"
-      Write-Host "   - Eliminación de ramas bloqueada"
-      Write-Host "   - Reglas aplican también a administradores"
+      Write-Host "   - Eliminacion de ramas bloqueada"
+      Write-Host "   - Reglas aplican tambien a administradores"
       Write-Host "============================================================"
     displayName: "Resumen exitoso"
     condition: succeeded()
