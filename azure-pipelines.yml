@@ -72,6 +72,30 @@ variables:
   - name: nodeRepo
     value: "Adrian-Bastidas/ArqGNode"
 jobs:
+  - job: DiagnosticoPayload
+    displayName: "DEBUG · Ver qué llega del webhook"
+    pool:
+      name: Default
+    steps:
+      - powershell: |
+          Write-Host "======== VARIABLES DE ENTORNO ========"
+          Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
+            Write-Host "$($_.Name) = $($_.Value)"
+          }
+
+          Write-Host "======== PARAMETERS port_trigger ========"
+          Write-Host "repoTemplate  : ${{ parameters.port_trigger.properties.repoTemplate }}"
+          Write-Host "newRepoName   : ${{ parameters.port_trigger.properties.newRepoName }}"
+          Write-Host "projectName   : ${{ parameters.port_trigger.properties.projectName }}"
+          Write-Host "repoVisibility: ${{ parameters.port_trigger.properties.repoVisibility }}"
+          Write-Host "runId         : ${{ parameters.port_trigger.port_context.runId }}"
+
+          Write-Host "======== VARIABLES RESUELTAS ========"
+          Write-Host "REPO_TEMPLATE  : $(REPO_TEMPLATE)"
+          Write-Host "NEW_REPO_NAME  : $(NEW_REPO_NAME)"
+          Write-Host "PROJECT_NAME   : $(PROJECT_NAME)"
+          Write-Host "REPO_VISIBILITY: $(REPO_VISIBILITY)"
+        displayName: "Imprimir todo lo disponible"
   # ==============================================================
   # JOB 0 — Prerequisitos
   # Verifica e instala todo lo necesario en el agente Windows
