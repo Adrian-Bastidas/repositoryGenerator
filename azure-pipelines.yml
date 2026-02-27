@@ -50,102 +50,58 @@ stages:
         pool:
           name: Default
         steps:
-          - powershell: |
-              $ErrorActionPreference = "Stop"
+          - bash: |
+              set -e
 
-              Write-Host "🔍 Verificando git..."
-              $gitPath = Get-Command git -ErrorAction SilentlyContinue
-              if (-not $gitPath) { throw "git no está instalado o no está en el PATH." }
-              Write-Host "✅ git: $(git --version)"
+              echo "🔍 Verificando git..."
+              if ! command -v git &> /dev/null; then
+                echo "git no encontrado, instalando..."
+                sudo apt-get update -qq && sudo apt-get install -y git
+              fi
+              echo "✅ git: $(git --version)"
 
-              Write-Host "🔍 Buscando Python en el sistema..."
-              $pythonCandidates = @(
-                "C:\Python311\python.exe",
-                "C:\Python312\python.exe",
-                "C:\Python310\python.exe",
-                "C:\Python39\python.exe",
-                "C:\Program Files\Python311\python.exe",
-                "C:\Program Files\Python312\python.exe",
-                "C:\Program Files\Python310\python.exe",
-                "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
-                "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-                "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe",
-                "$env:LOCALAPPDATA\Programs\Python\Python39\python.exe"
-              )
+              echo "🔍 Buscando Python en el sistema..."
+              PYTHON_EXE=""
 
-              $pythonExe = $null
-
-              foreach ($candidate in $pythonCandidates) {
-                if (Test-Path $candidate) {
-                  $ver = & $candidate --version 2>&1
-                  if ($LASTEXITCODE -eq 0 -and "$ver" -match "Python 3") {
-                    $pythonExe = $candidate
-                    Write-Host "✅ Python encontrado en: $candidate — $ver"
+              for candidate in python3.11 python3.12 python3.10 python3.9 python3 python; do
+                if command -v "$candidate" &> /dev/null; then
+                  ver=$("$candidate" --version 2>&1)
+                  if echo "$ver" | grep -q "Python 3"; then
+                    PYTHON_EXE=$(command -v "$candidate")
+                    echo "✅ Python encontrado: $PYTHON_EXE — $ver"
                     break
-                  }
-                }
-              }
+                  fi
+                fi
+              done
 
-              if (-not $pythonExe) {
-                $fromPath = Get-Command python -ErrorAction SilentlyContinue
-                if ($fromPath) {
-                  if ($fromPath.Source -notmatch "WindowsApps") {
-                    $ver = & $fromPath.Source --version 2>&1
-                    if ($LASTEXITCODE -eq 0 -and "$ver" -match "Python 3") {
-                      $pythonExe = $fromPath.Source
-                      Write-Host "✅ Python encontrado en PATH: $($fromPath.Source) — $ver"
-                    }
-                  } else {
-                    Write-Host "⚠️ 'python' en PATH es el stub de Microsoft Store, ignorando..."
-                  }
-                }
-              }
+              if [ -z "$PYTHON_EXE" ]; then
+                echo "⚙️ Python no encontrado. Instalando Python 3.11..."
+                sudo apt-get update -qq
+                sudo apt-get install -y python3.11 python3.11-venv python3-pip
+                PYTHON_EXE=$(command -v python3.11)
+                echo "✅ Python instalado: $($PYTHON_EXE --version)"
+              fi
 
-              if (-not $pythonExe) {
-                Write-Host "⚙️ Python no encontrado. Descargando Python 3.11..."
-                $installer   = "$env:TEMP\python-installer.exe"
-                $installDir  = "C:\Python311"
-                $downloadUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
-
-                Invoke-WebRequest -Uri $downloadUrl -OutFile $installer -UseBasicParsing
-                if (-not (Test-Path $installer)) { throw "No se pudo descargar el instalador de Python" }
-
-                Start-Process -FilePath $installer -ArgumentList @(
-                  "/quiet", "InstallAllUsers=0", "TargetDir=$installDir",
-                  "PrependPath=0", "Include_pip=1", "Include_launcher=0"
-                ) -Wait -NoNewWindow
-
-                if (-not (Test-Path "$installDir\python.exe")) {
-                  throw "La instalación de Python falló."
-                }
-
-                $pythonExe = "$installDir\python.exe"
-                $ver = & $pythonExe --version 2>&1
-                Write-Host "✅ Python instalado: $ver"
-                Remove-Item $installer -Force -ErrorAction SilentlyContinue
-              }
-
-              Write-Host "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$pythonExe"
+              echo "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$PYTHON_EXE"
             displayName: "Verificar / instalar Python"
             name: CheckPython
 
-          - powershell: |
-              $ErrorActionPreference = "Stop"
-              $pythonExe = "$(CheckPython.PYTHON_EXE)"
+          - bash: |
+              set -e
+              PYTHON_EXE="$(CheckPython.PYTHON_EXE)"
 
-              Write-Host "🔍 Verificando pip con: $pythonExe"
-              $pipVer = & $pythonExe -m pip --version 2>&1
-              if ($LASTEXITCODE -ne 0) { throw "pip no disponible. Detalle: $pipVer" }
-              Write-Host "✅ pip: $pipVer"
+              echo "🔍 Verificando pip con: $PYTHON_EXE"
+              if ! $PYTHON_EXE -m pip --version &> /dev/null; then
+                echo "pip no disponible, instalando..."
+                sudo apt-get install -y python3-pip
+              fi
+              echo "✅ pip: $($PYTHON_EXE -m pip --version)"
 
-              Write-Host "🍪 Instalando / actualizando Cookiecutter..."
-              & $pythonExe -m pip install --upgrade cookiecutter --quiet
-              if ($LASTEXITCODE -ne 0) { throw "Error instalando Cookiecutter" }
+              echo "🍪 Instalando / actualizando Cookiecutter..."
+              $PYTHON_EXE -m pip install --upgrade cookiecutter --quiet
+              echo "✅ Cookiecutter listo: $($PYTHON_EXE -m cookiecutter --version)"
 
-              $ccVer = & $pythonExe -m cookiecutter --version 2>&1
-              Write-Host "✅ Cookiecutter listo: $ccVer"
-
-              Write-Host "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$pythonExe"
+              echo "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$PYTHON_EXE"
             displayName: "Instalar Cookiecutter"
             name: InstalarCookiecutter
 
@@ -158,30 +114,33 @@ stages:
           name: Default
         dependsOn: Prerequisitos
         steps:
-          - powershell: |
-              $ErrorActionPreference = "Stop"
+          - bash: |
+              set -e
 
-              $repoName = "$(NEW_REPO_NAME)"
-              if ([string]::IsNullOrWhiteSpace($repoName)) { throw "Nombre de repositorio vacío" }
-              if ($repoName.Length -gt 100)                { throw "Nombre de repositorio demasiado largo (máx 100 caracteres)" }
-              if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') { throw "Nombre de repositorio con caracteres inválidos." }
-              Write-Host "✅ Nombre de repositorio válido: $repoName"
+              REPO_NAME="$(NEW_REPO_NAME)"
+              if [ -z "$REPO_NAME" ]; then echo "❌ Nombre de repositorio vacío"; exit 1; fi
+              if [ ${#REPO_NAME} -gt 100 ]; then echo "❌ Nombre de repositorio demasiado largo (máx 100 caracteres)"; exit 1; fi
+              if ! echo "$REPO_NAME" | grep -qE '^[a-zA-Z0-9._-]+$'; then echo "❌ Nombre de repositorio con caracteres inválidos."; exit 1; fi
+              echo "✅ Nombre de repositorio válido: $REPO_NAME"
 
-              $projectName = "$(PROJECT_NAME)"
-              if ([string]::IsNullOrWhiteSpace($projectName)) { throw "Nombre de proyecto vacío" }
-              if ($projectName.Length -gt 100)               { throw "Nombre de proyecto demasiado largo (máx 100 caracteres)" }
-              Write-Host "✅ Nombre de proyecto válido: $projectName"
+              PROJECT_NAME="$(PROJECT_NAME)"
+              if [ -z "$PROJECT_NAME" ]; then echo "❌ Nombre de proyecto vacío"; exit 1; fi
+              if [ ${#PROJECT_NAME} -gt 100 ]; then echo "❌ Nombre de proyecto demasiado largo (máx 100 caracteres)"; exit 1; fi
+              echo "✅ Nombre de proyecto válido: $PROJECT_NAME"
             displayName: "Validar parámetros de entrada"
 
-          - powershell: |
-              switch ("$(REPO_TEMPLATE)") {
-                "springboot" { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(springbootRepo)" }
-                "react"      { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(reactRepo)" }
-                "angular"    { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(angularRepo)" }
-                "node"       { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(nodeRepo)" }
-                default      { throw "Template no reconocido: $(REPO_TEMPLATE)" }
-              }
-              Write-Host "✅ Template seleccionado: $(REPO_TEMPLATE)"
+          - bash: |
+              set -e
+
+              case "$(REPO_TEMPLATE)" in
+                "springboot") echo "##vso[task.setvariable variable=templateRepo;isOutput=true]$(springbootRepo)" ;;
+                "react")      echo "##vso[task.setvariable variable=templateRepo;isOutput=true]$(reactRepo)" ;;
+                "angular")    echo "##vso[task.setvariable variable=templateRepo;isOutput=true]$(angularRepo)" ;;
+                "node")       echo "##vso[task.setvariable variable=templateRepo;isOutput=true]$(nodeRepo)" ;;
+                *)            echo "❌ Template no reconocido: $(REPO_TEMPLATE)"; exit 1 ;;
+              esac
+
+              echo "✅ Template seleccionado: $(REPO_TEMPLATE)"
             displayName: "Seleccionar template"
             name: SeleccionTemplate
 
@@ -197,58 +156,56 @@ stages:
           templateRepo: $[ dependencies.Validacion.outputs['SeleccionTemplate.templateRepo'] ]
           repoCreado: "false"
         steps:
-          - powershell: |
-              $ErrorActionPreference = "Stop"
-              $headers = @{
-                Authorization = "Bearer $(GITHUB_TOKEN)"
-                Accept        = "application/vnd.github+json"
-              }
+          - bash: |
+              set -e
 
-              $isPrivate = ("$(REPO_VISIBILITY)" -eq "private")
+              IS_PRIVATE=true
+              if [ "$(REPO_VISIBILITY)" = "public" ]; then IS_PRIVATE=false; fi
 
-              $body = @{
-                name      = "$(NEW_REPO_NAME)"
-                private   = $isPrivate
-                auto_init = $true
-              } | ConvertTo-Json
+              echo "📦 Creando repositorio '$(NEW_REPO_NAME)' (privado: $IS_PRIVATE)..."
 
-              Write-Host "📦 Creando repositorio '$(NEW_REPO_NAME)' (privado: $isPrivate)..."
+              RESPONSE=$(curl -s -w "\n%{http_code}" \
+                -X POST \
+                -H "Authorization: Bearer $(GITHUB_TOKEN)" \
+                -H "Accept: application/vnd.github+json" \
+                -H "Content-Type: application/json" \
+                -d "{\"name\": \"$(NEW_REPO_NAME)\", \"private\": $IS_PRIVATE, \"auto_init\": true}" \
+                "https://api.github.com/user/repos")
 
-              try {
-                $repo = Invoke-RestMethod `
-                  -Uri "https://api.github.com/user/repos" `
-                  -Method POST `
-                  -Headers $headers `
-                  -Body $body `
-                  -ContentType "application/json"
+              HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+              BODY=$(echo "$RESPONSE" | head -n-1)
 
-                Write-Host "##vso[task.setvariable variable=newRepoUrl;isOutput=true]$($repo.clone_url)"
-                Write-Host "##vso[task.setvariable variable=newRepoFullName;isOutput=true]$($repo.full_name)"
-                Write-Host "##vso[task.setvariable variable=repoCreado]true"
-                Write-Host "✅ Repositorio creado: $($repo.full_name)"
-              }
-              catch {
-                throw "No se pudo crear el repositorio. Detalle: $($_.Exception.Message)"
-              }
+              if [ "$HTTP_CODE" != "201" ]; then
+                echo "❌ Error al crear repositorio (HTTP $HTTP_CODE): $BODY"
+                exit 1
+              fi
+
+              CLONE_URL=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['clone_url'])")
+              FULL_NAME=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['full_name'])")
+
+              echo "##vso[task.setvariable variable=newRepoUrl;isOutput=true]$CLONE_URL"
+              echo "##vso[task.setvariable variable=newRepoFullName;isOutput=true]$FULL_NAME"
+              echo "##vso[task.setvariable variable=repoCreado]true"
+              echo "✅ Repositorio creado: $FULL_NAME"
             displayName: "Crear repositorio en GitHub"
             name: CrearRepo
 
-          - powershell: |
-              Write-Host "⚠️ Fallo al crear el repositorio. Iniciando rollback..."
-              if ("$(repoCreado)" -eq "true") {
-                try {
-                  Invoke-RestMethod `
-                    -Uri "https://api.github.com/repos/$(CrearRepo.newRepoFullName)" `
-                    -Method DELETE `
-                    -Headers @{ Authorization = "Bearer $(GITHUB_TOKEN)" }
-                  Write-Host "✅ Repositorio eliminado en rollback"
-                }
-                catch {
-                  Write-Host "##vso[task.logissue type=warning]No se pudo eliminar el repositorio en rollback: $($_.Exception.Message)"
-                }
-              } else {
-                Write-Host "ℹ️ El repositorio no llegó a crearse, no hay rollback necesario."
-              }
+          - bash: |
+              echo "⚠️ Fallo al crear el repositorio. Iniciando rollback..."
+              if [ "$(repoCreado)" = "true" ]; then
+                HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                  -X DELETE \
+                  -H "Authorization: Bearer $(GITHUB_TOKEN)" \
+                  "https://api.github.com/repos/$(CrearRepo.newRepoFullName)")
+
+                if [ "$HTTP_CODE" = "204" ]; then
+                  echo "✅ Repositorio eliminado en rollback"
+                else
+                  echo "##vso[task.logissue type=warning]No se pudo eliminar el repositorio en rollback (HTTP $HTTP_CODE)"
+                fi
+              else
+                echo "ℹ️ El repositorio no llegó a crearse, no hay rollback necesario."
+              fi
               exit 1
             condition: failed()
             displayName: "Rollback — eliminar repo si hubo error"
@@ -273,68 +230,60 @@ stages:
           - checkout: self
             displayName: "Checkout del repo del pipeline"
 
-          - powershell: |
-              $ErrorActionPreference = "Stop"
-              $token    = "$(GITHUB_TOKEN)"
-              $python   = "$(PYTHON_EXE)"
+          - bash: |
+              set -e
+              TOKEN="$(GITHUB_TOKEN)"
+              PYTHON="$(PYTHON_EXE)"
 
-              $templateCloneDir = "$(Agent.TempDirectory)/template-raw"
-              $ccTemplateDir    = "$(Agent.TempDirectory)/cc-template"
-              $outputDir        = "$(Agent.TempDirectory)/cookiecutter-output"
+              TEMPLATE_CLONE_DIR="$(Agent.TempDirectory)/template-raw"
+              CC_TEMPLATE_DIR="$(Agent.TempDirectory)/cc-template"
+              OUTPUT_DIR="$(Agent.TempDirectory)/cookiecutter-output"
 
-              Write-Host "📥 Clonando template: $(templateRepo)"
-              git clone "https://$token@github.com/$(templateRepo).git" $templateCloneDir
-              if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
+              echo "📥 Clonando template: $(templateRepo)"
+              git clone "https://$TOKEN@github.com/$(templateRepo).git" "$TEMPLATE_CLONE_DIR"
 
-              New-Item -ItemType Directory -Force -Path $ccTemplateDir | Out-Null
-              $innerFolder = "$ccTemplateDir/{{cookiecutter.project_name}}"
-              New-Item -ItemType Directory -Force -Path $innerFolder | Out-Null
+              mkdir -p "$CC_TEMPLATE_DIR/{{cookiecutter.project_name}}"
 
-              Get-ChildItem $templateCloneDir -Force |
-                  Where-Object { $_.Name -ne ".git" } |
-                  ForEach-Object {
-                      Copy-Item $_.FullName -Destination $innerFolder -Recurse -Force
-                  }
+              # Copiar archivos del template (sin .git)
+              find "$TEMPLATE_CLONE_DIR" -mindepth 1 -maxdepth 1 ! -name '.git' \
+                -exec cp -r {} "$CC_TEMPLATE_DIR/{{cookiecutter.project_name}}/" \;
 
-              $jsonContent = @{ project_name = "$(PROJECT_NAME)" } | ConvertTo-Json -Depth 5
-              [System.IO.File]::WriteAllText(
-                  "$ccTemplateDir/cookiecutter.json",
-                  $jsonContent,
-                  (New-Object System.Text.UTF8Encoding($false))
-              )
+              # Escribir cookiecutter.json
+              echo "{\"project_name\": \"$(PROJECT_NAME)\"}" > "$CC_TEMPLATE_DIR/cookiecutter.json"
 
-              Write-Host "🍪 Ejecutando Cookiecutter..."
-              New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+              echo "🍪 Ejecutando Cookiecutter..."
+              mkdir -p "$OUTPUT_DIR"
 
-              & $python -m cookiecutter $ccTemplateDir `
-                  --no-input `
-                  --output-dir $outputDir `
-                  --overwrite-if-exists
+              $PYTHON -m cookiecutter "$CC_TEMPLATE_DIR" \
+                --no-input \
+                --output-dir "$OUTPUT_DIR" \
+                --overwrite-if-exists
 
-              if ($LASTEXITCODE -ne 0) { throw "Error ejecutando Cookiecutter" }
+              GENERATED_FOLDER=$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d | head -n1)
+              if [ -z "$GENERATED_FOLDER" ]; then
+                echo "❌ Cookiecutter no generó ninguna carpeta de salida"
+                exit 1
+              fi
 
-              $generatedFolder = Get-ChildItem $outputDir -Directory | Select-Object -First 1
-              if (-not $generatedFolder) { throw "Cookiecutter no generó ninguna carpeta de salida" }
-
-              Write-Host "✅ Código generado en: $($generatedFolder.FullName)"
-              Write-Host "##vso[task.setvariable variable=generatedPath;isOutput=true]$($generatedFolder.FullName)"
+              echo "✅ Código generado en: $GENERATED_FOLDER"
+              echo "##vso[task.setvariable variable=generatedPath;isOutput=true]$GENERATED_FOLDER"
             displayName: "Clonar template y aplicar Cookiecutter"
             name: AplicarCookiecutter
 
-          - powershell: |
-              $ErrorActionPreference = "Stop"
-              $token         = "$(GITHUB_TOKEN)"
-              $cloneUrl      = "https://$token@github.com/$(newRepoFullName).git"
-              $generatedPath = "$(AplicarCookiecutter.generatedPath)"
+          - bash: |
+              set -e
+              TOKEN="$(GITHUB_TOKEN)"
+              CLONE_URL="https://$TOKEN@github.com/$(newRepoFullName).git"
+              GENERATED_PATH="$(AplicarCookiecutter.generatedPath)"
 
-              Set-Location $generatedPath
+              cd "$GENERATED_PATH"
 
               git init
-              git remote add origin $cloneUrl
+              git remote add origin "$CLONE_URL"
               git config user.email "pipeline@azure-devops.local"
               git config user.name  "Azure Pipeline"
 
-              Write-Host "🌿 Subiendo rama main..."
+              echo "🌿 Subiendo rama main..."
               git checkout -B main
               git add .
               git commit -m "feat: initial project structure from $(REPO_TEMPLATE) template
@@ -345,30 +294,28 @@ stages:
               - Repo      : $(NEW_REPO_NAME)"
 
               git push origin main --force
-              if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de main" }
 
-              Write-Host "🌿 Creando y subiendo rama develop..."
+              echo "🌿 Creando y subiendo rama develop..."
               git checkout -b develop
               git push origin develop
-              if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de develop" }
 
-              Write-Host "✅ Ramas main y develop subidas"
-              Write-Host "⏳ Esperando 8 segundos para que GitHub indexe las ramas..."
-              Start-Sleep -Seconds 8
+              echo "✅ Ramas main y develop subidas"
+              echo "⏳ Esperando 8 segundos para que GitHub indexe las ramas..."
+              sleep 8
             displayName: "Subir código generado al nuevo repositorio"
 
-          - powershell: |
-              Write-Host "⚠️ Fallo al aplicar template o subir código. Iniciando rollback..."
-              try {
-                Invoke-RestMethod `
-                  -Uri "https://api.github.com/repos/$(newRepoFullName)" `
-                  -Method DELETE `
-                  -Headers @{ Authorization = "Bearer $(GITHUB_TOKEN)" }
-                Write-Host "✅ Repositorio eliminado en rollback"
-              }
-              catch {
-                Write-Host "##vso[task.logissue type=warning]No se pudo eliminar el repositorio en rollback: $($_.Exception.Message)"
-              }
+          - bash: |
+              echo "⚠️ Fallo al aplicar template o subir código. Iniciando rollback..."
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X DELETE \
+                -H "Authorization: Bearer $(GITHUB_TOKEN)" \
+                "https://api.github.com/repos/$(newRepoFullName)")
+
+              if [ "$HTTP_CODE" = "204" ]; then
+                echo "✅ Repositorio eliminado en rollback"
+              else
+                echo "##vso[task.logissue type=warning]No se pudo eliminar el repositorio en rollback (HTTP $HTTP_CODE)"
+              fi
               exit 1
             condition: failed()
             displayName: "Rollback — eliminar repo si hubo error"
@@ -386,95 +333,96 @@ stages:
         variables:
           newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
         steps:
-          - powershell: |
-              $headers = @{
-                Authorization = "Bearer $(GITHUB_TOKEN)"
-                Accept        = "application/vnd.github+json"
-              }
-
-              function Protect-WithRuleset {
-                param([string]$branchName)
-                $body = @{
-                  name        = "protect-$branchName"
-                  target      = "branch"
-                  enforcement = "active"
-                  conditions  = @{
-                    ref_name = @{
-                      include = @("refs/heads/$branchName")
-                      exclude = @()
+          - bash: |
+              protect_with_ruleset() {
+                BRANCH=$1
+                BODY=$(cat <<EOF
+              {
+                "name": "protect-$BRANCH",
+                "target": "branch",
+                "enforcement": "active",
+                "conditions": {
+                  "ref_name": {
+                    "include": ["refs/heads/$BRANCH"],
+                    "exclude": []
+                  }
+                },
+                "rules": [
+                  {
+                    "type": "pull_request",
+                    "parameters": {
+                      "required_approving_review_count": 1,
+                      "dismiss_stale_reviews_on_push": true,
+                      "require_code_owner_review": false,
+                      "require_last_push_approval": false,
+                      "required_review_thread_resolution": false
                     }
-                  }
-                  rules = @(
-                    @{
-                      type       = "pull_request"
-                      parameters = @{
-                        required_approving_review_count   = 1
-                        dismiss_stale_reviews_on_push     = $true
-                        require_code_owner_review         = $false
-                        require_last_push_approval        = $false
-                        required_review_thread_resolution = $false
-                      }
-                    },
-                    @{ type = "non_fast_forward" },
-                    @{ type = "deletion" }
-                  )
-                } | ConvertTo-Json -Depth 10
-
-                Invoke-RestMethod `
-                  -Uri "https://api.github.com/repos/$(newRepoFullName)/rulesets" `
-                  -Method POST -Headers $headers `
-                  -Body $body -ContentType "application/json" | Out-Null
+                  },
+                  { "type": "non_fast_forward" },
+                  { "type": "deletion" }
+                ]
+              }
+              EOF
+              )
+                HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                  -X POST \
+                  -H "Authorization: Bearer $(GITHUB_TOKEN)" \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Content-Type: application/json" \
+                  -d "$BODY" \
+                  "https://api.github.com/repos/$(newRepoFullName)/rulesets")
+                return $([ "$HTTP_CODE" = "201" ] && echo 0 || echo 1)
               }
 
-              function Protect-WithBranchProtection {
-                param([string]$branchName)
-                $body = @{
-                  required_status_checks        = $null
-                  enforce_admins                = $true
-                  required_pull_request_reviews = @{
-                    required_approving_review_count = 1
-                    dismiss_stale_reviews           = $true
-                    require_code_owner_reviews      = $false
-                  }
-                  restrictions       = $null
-                  allow_force_pushes = $false
-                  allow_deletions    = $false
-                } | ConvertTo-Json -Depth 5
-
-                Invoke-RestMethod `
-                  -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/$branchName/protection" `
-                  -Method PUT -Headers $headers `
-                  -Body $body -ContentType "application/json" | Out-Null
+              protect_with_branch_protection() {
+                BRANCH=$1
+                BODY=$(cat <<EOF
+              {
+                "required_status_checks": null,
+                "enforce_admins": true,
+                "required_pull_request_reviews": {
+                  "required_approving_review_count": 1,
+                  "dismiss_stale_reviews": true,
+                  "require_code_owner_reviews": false
+                },
+                "restrictions": null,
+                "allow_force_pushes": false,
+                "allow_deletions": false
+              }
+              EOF
+              )
+                HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                  -X PUT \
+                  -H "Authorization: Bearer $(GITHUB_TOKEN)" \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Content-Type: application/json" \
+                  -d "$BODY" \
+                  "https://api.github.com/repos/$(newRepoFullName)/branches/$BRANCH/protection")
+                return $([ "$HTTP_CODE" = "200" ] && echo 0 || echo 1)
               }
 
-              function Protect-Branch {
-                param([string]$branchName)
-                Write-Host "🛡️ Intentando proteger rama '$branchName'..."
+              protect_branch() {
+                BRANCH=$1
+                echo "🛡️ Intentando proteger rama '$BRANCH'..."
 
-                try {
-                  Protect-WithRuleset -branchName $branchName
-                  Write-Host "✅ '$branchName' protegida con Rulesets"
+                if protect_with_ruleset "$BRANCH"; then
+                  echo "✅ '$BRANCH' protegida con Rulesets"
                   return
-                }
-                catch {
-                  $code = $_.Exception.Response.StatusCode.value__
-                  Write-Host "⚠️ Rulesets falló en '$branchName' (HTTP $code) → intentando Branch Protection legacy..."
-                }
+                fi
 
-                try {
-                  Protect-WithBranchProtection -branchName $branchName
-                  Write-Host "✅ '$branchName' protegida con Branch Protection legacy"
+                echo "⚠️ Rulesets falló en '$BRANCH' → intentando Branch Protection legacy..."
+
+                if protect_with_branch_protection "$BRANCH"; then
+                  echo "✅ '$BRANCH' protegida con Branch Protection legacy"
                   return
-                }
-                catch {
-                  $code = $_.Exception.Response.StatusCode.value__
-                  Write-Host "##vso[task.logissue type=warning]No se pudo proteger '$branchName' con ningún método (HTTP $code)."
-                  Write-Host "##vso[task.logissue type=warning]Aplica la protección manualmente desde GitHub → Settings → Branches."
-                }
+                fi
+
+                echo "##vso[task.logissue type=warning]No se pudo proteger '$BRANCH' con ningún método."
+                echo "##vso[task.logissue type=warning]Aplica la protección manualmente desde GitHub → Settings → Branches."
               }
 
-              Protect-Branch -branchName "main"
-              Protect-Branch -branchName "develop"
+              protect_branch "main"
+              protect_branch "develop"
               exit 0
             displayName: "Aplicar protección en main y develop"
 
@@ -493,16 +441,16 @@ stages:
           newRepoUrl: $[ dependencies.AplicarTemplateYSubirCodigo.outputs['CrearRepo.newRepoUrl'] ]
           newRepoFullName: $[ dependencies.AplicarTemplateYSubirCodigo.outputs['CrearRepo.newRepoFullName'] ]
         steps:
-          - powershell: |
-              Write-Host "========================================"
-              Write-Host "✅ Repositorio creado y configurado"
-              Write-Host "📦 Template    : $(REPO_TEMPLATE)"
-              Write-Host "📛 Proyecto    : $(PROJECT_NAME)"
-              Write-Host "🗂️  Repositorio : $(NEW_REPO_NAME)"
-              Write-Host "🔒 Visibilidad : $(REPO_VISIBILITY)"
-              Write-Host "🌿 Ramas       : main, develop"
-              Write-Host "🛡️ Protección  : ver logs del Job 4"
-              Write-Host "========================================"
+          - bash: |
+              echo "========================================"
+              echo "✅ Repositorio creado y configurado"
+              echo "📦 Template    : $(REPO_TEMPLATE)"
+              echo "📛 Proyecto    : $(PROJECT_NAME)"
+              echo "🗂️  Repositorio : $(NEW_REPO_NAME)"
+              echo "🔒 Visibilidad : $(REPO_VISIBILITY)"
+              echo "🌿 Ramas       : main, develop"
+              echo "🛡️ Protección  : ver logs del Job 4"
+              echo "========================================"
             displayName: "Mostrar resumen"
 
   # ==============================================================
@@ -518,38 +466,25 @@ stages:
         pool:
           name: Default
         steps:
-          - powershell: |
-              # 1. Obtener token fresco de Port
-              $authBody = @{
-                clientId     = "$(PORT_CLIENT_ID)"
-                clientSecret = "$(PORT_CLIENT_SECRET)"
-              } | ConvertTo-Json
+          - bash: |
+              set -e
 
-              $authResponse = Invoke-RestMethod `
-                -Uri "https://api.getport.io/v1/auth/access_token" `
-                -Method POST `
-                -Body $authBody `
-                -ContentType "application/json"
+              echo "🔑 Obteniendo token de Port..."
+              AUTH_RESPONSE=$(curl -s -X POST \
+                -H "Content-Type: application/json" \
+                -d "{\"clientId\": \"$(PORT_CLIENT_ID)\", \"clientSecret\": \"$(PORT_CLIENT_SECRET)\"}" \
+                "https://api.getport.io/v1/auth/access_token")
 
-              $token = $authResponse.accessToken
-              Write-Host "✅ Token de Port obtenido"
+              TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
+              echo "✅ Token de Port obtenido"
 
-              # 2. Notificar éxito
-              $body = @{
-                status  = "SUCCESS"
-                message = @{ run_status = "Pipeline completed successfully!" }
-              } | ConvertTo-Json
+              curl -s -X PATCH \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $TOKEN" \
+                -d '{"status": "SUCCESS", "message": {"run_status": "Pipeline completed successfully!"}}' \
+                "https://api.getport.io/v1/actions/runs/$(RUN_ID)"
 
-              Invoke-RestMethod `
-                -Uri "https://api.getport.io/v1/actions/runs/$(RUN_ID)" `
-                -Method PATCH `
-                -Headers @{
-                  "Content-Type"  = "application/json"
-                  "Authorization" = "Bearer $token"
-                } `
-                -Body $body
-
-              Write-Host "✅ Port notificado: SUCCESS"
+              echo "✅ Port notificado: SUCCESS"
             displayName: "PATCH run → SUCCESS"
 
   # ==============================================================
@@ -565,36 +500,23 @@ stages:
         pool:
           name: Default
         steps:
-          - powershell: |
-              # 1. Obtener token fresco de Port
-              $authBody = @{
-                clientId     = "$(PORT_CLIENT_ID)"
-                clientSecret = "$(PORT_CLIENT_SECRET)"
-              } | ConvertTo-Json
+          - bash: |
+              set -e
 
-              $authResponse = Invoke-RestMethod `
-                -Uri "https://api.getport.io/v1/auth/access_token" `
-                -Method POST `
-                -Body $authBody `
-                -ContentType "application/json"
+              echo "🔑 Obteniendo token de Port..."
+              AUTH_RESPONSE=$(curl -s -X POST \
+                -H "Content-Type: application/json" \
+                -d "{\"clientId\": \"$(PORT_CLIENT_ID)\", \"clientSecret\": \"$(PORT_CLIENT_SECRET)\"}" \
+                "https://api.getport.io/v1/auth/access_token")
 
-              $token = $authResponse.accessToken
-              Write-Host "✅ Token de Port obtenido"
+              TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
+              echo "✅ Token de Port obtenido"
 
-              # 2. Notificar fallo
-              $body = @{
-                status  = "FAILURE"
-                message = @{ run_status = "Pipeline failed!" }
-              } | ConvertTo-Json
+              curl -s -X PATCH \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $TOKEN" \
+                -d '{"status": "FAILURE", "message": {"run_status": "Pipeline failed!"}}' \
+                "https://api.getport.io/v1/actions/runs/$(RUN_ID)"
 
-              Invoke-RestMethod `
-                -Uri "https://api.getport.io/v1/actions/runs/$(RUN_ID)" `
-                -Method PATCH `
-                -Headers @{
-                  "Content-Type"  = "application/json"
-                  "Authorization" = "Bearer $token"
-                } `
-                -Body $body
-
-              Write-Host "✅ Port notificado: FAILURE"
+              echo "✅ Port notificado: FAILURE"
             displayName: "PATCH run → FAILURE"
