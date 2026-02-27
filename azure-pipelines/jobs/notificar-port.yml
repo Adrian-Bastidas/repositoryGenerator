@@ -3,6 +3,8 @@ parameters:
     type: string
   - name: message
     type: string
+  - name: runId
+    type: string
 
 jobs:
   - job: notificar_port
@@ -26,7 +28,7 @@ jobs:
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $TOKEN" \
             -d "{\"status\": \"${{ parameters.status }}\", \"message\": {\"run_status\": \"${{ parameters.message }}\"}}" \
-            "https://api.getport.io/v1/actions/runs/$(RUN_ID)"
+            "https://api.getport.io/v1/actions/runs/${{ parameters.runId }}"
 
           echo "✅ Port notificado: ${{ parameters.status }}"
         displayName: "PATCH run → ${{ parameters.status }}"

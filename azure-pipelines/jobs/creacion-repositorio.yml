@@ -1,3 +1,9 @@
+parameters:
+  - name: newRepoName
+    type: string
+  - name: repoVisibility
+    type: string
+
 jobs:
   - job: CreacionRepositorio
     displayName: "Job 2 · Creación del repositorio en GitHub"
@@ -12,16 +18,16 @@ jobs:
           set -e
 
           IS_PRIVATE=true
-          if [ "$(REPO_VISIBILITY)" = "public" ]; then IS_PRIVATE=false; fi
+          if [ "${{ parameters.repoVisibility }}" = "public" ]; then IS_PRIVATE=false; fi
 
-          echo "📦 Creando repositorio '$(NEW_REPO_NAME)' (privado: $IS_PRIVATE)..."
+          echo "📦 Creando repositorio '${{ parameters.newRepoName }}' (privado: $IS_PRIVATE)..."
 
           RESPONSE=$(curl -s -w "\n%{http_code}" \
             -X POST \
             -H "Authorization: Bearer $(GITHUB_TOKEN)" \
             -H "Accept: application/vnd.github+json" \
             -H "Content-Type: application/json" \
-            -d "{\"name\": \"$(NEW_REPO_NAME)\", \"private\": $IS_PRIVATE, \"auto_init\": true}" \
+            -d "{\"name\": \"${{ parameters.newRepoName }}\", \"private\": $IS_PRIVATE, \"auto_init\": true}" \
             "https://api.github.com/user/repos")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
@@ -49,7 +55,6 @@ jobs:
               -X DELETE \
               -H "Authorization: Bearer $(GITHUB_TOKEN)" \
               "https://api.github.com/repos/$(CrearRepo.newRepoFullName)")
-
             if [ "$HTTP_CODE" = "204" ]; then
               echo "✅ Repositorio eliminado en rollback"
             else

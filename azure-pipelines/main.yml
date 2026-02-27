@@ -14,9 +14,24 @@ stages:
     displayName: "Creación de repositorio"
     jobs:
       - template: jobs/prerequisitos.yml
+
       - template: jobs/validacion.yml
+        parameters:
+          newRepoName: ${{ parameters.port_trigger.properties.newRepoName }}
+          projectName: ${{ parameters.port_trigger.properties.projectName }}
+          repoTemplate: ${{ parameters.port_trigger.properties.repoTemplate }}
+
       - template: jobs/creacion-repositorio.yml
+        parameters:
+          newRepoName: ${{ parameters.port_trigger.properties.newRepoName }}
+          repoVisibility: ${{ parameters.port_trigger.properties.repoVisibility }}
+
       - template: jobs/aplicar-template.yml
+        parameters:
+          projectName: ${{ parameters.port_trigger.properties.projectName }}
+          repoTemplate: ${{ parameters.port_trigger.properties.repoTemplate }}
+          newRepoName: ${{ parameters.port_trigger.properties.newRepoName }}
+
       - template: jobs/proteccion-ramas.yml
       - template: jobs/resumen-final.yml
 
@@ -29,6 +44,7 @@ stages:
         parameters:
           status: "SUCCESS"
           message: "Pipeline completed successfully!"
+          runId: ${{ parameters.port_trigger.port_context.runId }}
 
   - stage: update_run_failed
     displayName: "Notificar fallo a Port"
@@ -39,3 +55,4 @@ stages:
         parameters:
           status: "FAILURE"
           message: "Pipeline failed!"
+          runId: ${{ parameters.port_trigger.port_context.runId }}
