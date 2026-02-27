@@ -45,28 +45,16 @@ variables:
   # ===============================
 
   - name: REPO_TEMPLATE
-    value: ${{ coalesce(
-      parameters.port_trigger.properties.repoTemplate,
-      parameters.repoTemplate
-    ) }}
+    value: ${{ coalesce(parameters.port_trigger.properties.repoTemplate, parameters.repoTemplate) }}
 
   - name: NEW_REPO_NAME
-    value: ${{ coalesce(
-      parameters.port_trigger.properties.newRepoName,
-      parameters.newRepoName
-    ) }}
+    value: ${{ coalesce(parameters.port_trigger.properties.newRepoName, parameters.newRepoName) }}
 
   - name: PROJECT_NAME
-    value: ${{ coalesce(
-      parameters.port_trigger.properties.projectName,
-      parameters.projectName
-    ) }}
+    value: ${{ coalesce(parameters.port_trigger.properties.projectName,parameters.projectName) }}
 
   - name: REPO_VISIBILITY
-    value: ${{ coalesce(
-      parameters.port_trigger.properties.repoVisibility,
-      parameters.repoVisibility
-    ) }}
+    value: ${{ coalesce(parameters.port_trigger.properties.repoVisibility,parameters.repoVisibility) }}
 
   # ===============================
   # Templates disponibles
