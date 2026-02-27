@@ -1,0 +1,41 @@
+trigger: none
+
+resources:
+  webhooks:
+    - webhook: port_trigger
+      connection: port_trigger
+
+variables:
+  - template: variables/variables.yml
+  - group: github-secrets
+
+stages:
+  - stage: Pipeline
+    displayName: "Creación de repositorio"
+    jobs:
+      - template: jobs/prerequisitos.yml
+      - template: jobs/validacion.yml
+      - template: jobs/creacion-repositorio.yml
+      - template: jobs/aplicar-template.yml
+      - template: jobs/proteccion-ramas.yml
+      - template: jobs/resumen-final.yml
+
+  - stage: update_run_success
+    displayName: "Notificar éxito a Port"
+    dependsOn: Pipeline
+    condition: succeeded('Pipeline')
+    jobs:
+      - template: jobs/notificar-port.yml
+        parameters:
+          status: "SUCCESS"
+          message: "Pipeline completed successfully!"
+
+  - stage: update_run_failed
+    displayName: "Notificar fallo a Port"
+    dependsOn: Pipeline
+    condition: failed('Pipeline')
+    jobs:
+      - template: jobs/notificar-port.yml
+        parameters:
+          status: "FAILURE"
+          message: "Pipeline failed!"

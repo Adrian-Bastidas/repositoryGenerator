@@ -1,0 +1,103 @@
+jobs:
+  - job: ProteccionRamas
+    displayName: "Job 4 · Protección de ramas (best-effort)"
+    pool:
+      name: Default
+    dependsOn:
+      - AplicarTemplateYSubirCodigo
+      - CreacionRepositorio
+    variables:
+      newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
+    steps:
+      - bash: |
+          protect_with_ruleset() {
+            BRANCH=$1
+            BODY=$(cat <<EOF
+          {
+            "name": "protect-$BRANCH",
+            "target": "branch",
+            "enforcement": "active",
+            "conditions": {
+              "ref_name": {
+                "include": ["refs/heads/$BRANCH"],
+                "exclude": []
+              }
+            },
+            "rules": [
+              {
+                "type": "pull_request",
+                "parameters": {
+                  "required_approving_review_count": 1,
+                  "dismiss_stale_reviews_on_push": true,
+                  "require_code_owner_review": false,
+                  "require_last_push_approval": false,
+                  "required_review_thread_resolution": false
+                }
+              },
+              { "type": "non_fast_forward" },
+              { "type": "deletion" }
+            ]
+          }
+          EOF
+          )
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer $(GITHUB_TOKEN)" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              -d "$BODY" \
+              "https://api.github.com/repos/$(newRepoFullName)/rulesets")
+            [ "$HTTP_CODE" = "201" ]
+          }
+
+          protect_with_branch_protection() {
+            BRANCH=$1
+            BODY=$(cat <<EOF
+          {
+            "required_status_checks": null,
+            "enforce_admins": true,
+            "required_pull_request_reviews": {
+              "required_approving_review_count": 1,
+              "dismiss_stale_reviews": true,
+              "require_code_owner_reviews": false
+            },
+            "restrictions": null,
+            "allow_force_pushes": false,
+            "allow_deletions": false
+          }
+          EOF
+          )
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X PUT \
+              -H "Authorization: Bearer $(GITHUB_TOKEN)" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              -d "$BODY" \
+              "https://api.github.com/repos/$(newRepoFullName)/branches/$BRANCH/protection")
+            [ "$HTTP_CODE" = "200" ]
+          }
+
+          protect_branch() {
+            BRANCH=$1
+            echo "🛡️ Intentando proteger rama '$BRANCH'..."
+
+            if protect_with_ruleset "$BRANCH"; then
+              echo "✅ '$BRANCH' protegida con Rulesets"
+              return
+            fi
+
+            echo "⚠️ Rulesets falló en '$BRANCH' → intentando Branch Protection legacy..."
+
+            if protect_with_branch_protection "$BRANCH"; then
+              echo "✅ '$BRANCH' protegida con Branch Protection legacy"
+              return
+            fi
+
+            echo "##vso[task.logissue type=warning]No se pudo proteger '$BRANCH' con ningún método."
+            echo "##vso[task.logissue type=warning]Aplica la protección manualmente desde GitHub → Settings → Branches."
+          }
+
+          protect_branch "main"
+          protect_branch "develop"
+          exit 0
+        displayName: "Aplicar protección en main y develop"

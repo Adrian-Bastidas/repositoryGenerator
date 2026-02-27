@@ -1,0 +1,36 @@
+jobs:
+  - job: Validacion
+    displayName: "Job 1 · Validación y selección de template"
+    pool:
+      name: Default
+    dependsOn: Prerequisitos
+    steps:
+      - bash: |
+          set -e
+
+          REPO_NAME="$(NEW_REPO_NAME)"
+          if [ -z "$REPO_NAME" ]; then echo "❌ Nombre de repositorio vacío"; exit 1; fi
+          if [ ${#REPO_NAME} -gt 100 ]; then echo "❌ Nombre de repositorio demasiado largo (máx 100 caracteres)"; exit 1; fi
+          if ! echo "$REPO_NAME" | grep -qE '^[a-zA-Z0-9._-]+$'; then echo "❌ Nombre de repositorio con caracteres inválidos."; exit 1; fi
+          echo "✅ Nombre de repositorio válido: $REPO_NAME"
+
+          PROJECT_NAME="$(PROJECT_NAME)"
+          if [ -z "$PROJECT_NAME" ]; then echo "❌ Nombre de proyecto vacío"; exit 1; fi
+          if [ ${#PROJECT_NAME} -gt 100 ]; then echo "❌ Nombre de proyecto demasiado largo (máx 100 caracteres)"; exit 1; fi
+          echo "✅ Nombre de proyecto válido: $PROJECT_NAME"
+        displayName: "Validar parámetros de entrada"
+
+      - bash: |
+          set -e
+
+          case "$(REPO_TEMPLATE)" in
+            "springboot") echo "##vso[task.setvariable variable=templateRepo;isOutput=true]$(springbootRepo)" ;;
+            "react")      echo "##vso[task.setvariable variable=templateRepo;isOutput=true]$(reactRepo)" ;;
+            "angular")    echo "##vso[task.setvariable variable=templateRepo;isOutput=true]$(angularRepo)" ;;
+            "node")       echo "##vso[task.setvariable variable=templateRepo;isOutput=true]$(nodeRepo)" ;;
+            *)            echo "❌ Template no reconocido: $(REPO_TEMPLATE)"; exit 1 ;;
+          esac
+
+          echo "✅ Template seleccionado: $(REPO_TEMPLATE)"
+        displayName: "Seleccionar template"
+        name: SeleccionTemplate

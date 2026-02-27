@@ -1,0 +1,27 @@
+variables:
+  - name: REPO_TEMPLATE
+    value: ${{ parameters.port_trigger.properties.repoTemplate }}
+
+  - name: NEW_REPO_NAME
+    value: ${{ parameters.port_trigger.properties.newRepoName }}
+
+  - name: PROJECT_NAME
+    value: ${{ parameters.port_trigger.properties.projectName }}
+
+  - name: REPO_VISIBILITY
+    value: ${{ parameters.port_trigger.properties.repoVisibility }}
+
+  - name: RUN_ID
+    value: ${{ parameters.port_trigger.port_context.runId }}
+
+  - name: springbootRepo
+    value: "Adrian-Bastidas/AqrGSprinboot"
+
+  - name: reactRepo
+    value: "Adrian-Bastidas/ArqGReact"
+
+  - name: angularRepo
+    value: "Adrian-Bastidas/ArqGAngular"
+
+  - name: nodeRepo
+    value: "Adrian-Bastidas/ArqGNode"

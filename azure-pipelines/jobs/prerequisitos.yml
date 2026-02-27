@@ -1,0 +1,60 @@
+jobs:
+  - job: Prerequisitos
+    displayName: "Job 0 · Prerequisitos — instalar herramientas"
+    pool:
+      name: Default
+    steps:
+      - bash: |
+          set -e
+
+          echo "🔍 Verificando git..."
+          if ! command -v git &> /dev/null; then
+            echo "git no encontrado, instalando..."
+            apt-get update -qq && apt-get install -y git
+          fi
+          echo "✅ git: $(git --version)"
+
+          echo "🔍 Buscando Python en el sistema..."
+          PYTHON_EXE=""
+
+          for candidate in python3.11 python3.12 python3.10 python3.9 python3 python; do
+            if command -v "$candidate" &> /dev/null; then
+              ver=$("$candidate" --version 2>&1)
+              if echo "$ver" | grep -q "Python 3"; then
+                PYTHON_EXE=$(command -v "$candidate")
+                echo "✅ Python encontrado: $PYTHON_EXE — $ver"
+                break
+              fi
+            fi
+          done
+
+          if [ -z "$PYTHON_EXE" ]; then
+            echo "⚙️ Python no encontrado. Instalando Python 3.11..."
+            apt-get update -qq
+            apt-get install -y python3.11 python3.11-venv python3-pip
+            PYTHON_EXE=$(command -v python3.11)
+            echo "✅ Python instalado: $($PYTHON_EXE --version)"
+          fi
+
+          echo "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$PYTHON_EXE"
+        displayName: "Verificar / instalar Python"
+        name: CheckPython
+
+      - bash: |
+          set -e
+          PYTHON_EXE="$(CheckPython.PYTHON_EXE)"
+
+          echo "🔍 Verificando pip con: $PYTHON_EXE"
+          if ! $PYTHON_EXE -m pip --version &> /dev/null; then
+            echo "pip no disponible, instalando..."
+            apt-get install -y python3-pip
+          fi
+          echo "✅ pip: $($PYTHON_EXE -m pip --version)"
+
+          echo "🍪 Instalando / actualizando Cookiecutter..."
+          $PYTHON_EXE -m pip install --upgrade cookiecutter --quiet
+          echo "✅ Cookiecutter listo: $($PYTHON_EXE -m cookiecutter --version)"
+
+          echo "##vso[task.setvariable variable=PYTHON_EXE;isOutput=true]$PYTHON_EXE"
+        displayName: "Instalar Cookiecutter"
+        name: InstalarCookiecutter

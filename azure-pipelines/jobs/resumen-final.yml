@@ -1,0 +1,24 @@
+jobs:
+  - job: ResumenFinal
+    displayName: "Job 5 · Resumen final"
+    pool:
+      name: Default
+    dependsOn:
+      - AplicarTemplateYSubirCodigo
+      - ProteccionRamas
+    condition: succeeded('AplicarTemplateYSubirCodigo')
+    variables:
+      newRepoUrl: $[ dependencies.AplicarTemplateYSubirCodigo.outputs['CrearRepo.newRepoUrl'] ]
+      newRepoFullName: $[ dependencies.AplicarTemplateYSubirCodigo.outputs['CrearRepo.newRepoFullName'] ]
+    steps:
+      - bash: |
+          echo "========================================"
+          echo "✅ Repositorio creado y configurado"
+          echo "📦 Template    : $(REPO_TEMPLATE)"
+          echo "📛 Proyecto    : $(PROJECT_NAME)"
+          echo "🗂️  Repositorio : $(NEW_REPO_NAME)"
+          echo "🔒 Visibilidad : $(REPO_VISIBILITY)"
+          echo "🌿 Ramas       : main, develop"
+          echo "🛡️ Protección  : ver logs del Job 4"
+          echo "========================================"
+        displayName: "Mostrar resumen"

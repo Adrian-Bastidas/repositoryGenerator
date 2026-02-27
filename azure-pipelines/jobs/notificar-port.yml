@@ -1,0 +1,32 @@
+parameters:
+  - name: status
+    type: string
+  - name: message
+    type: string
+
+jobs:
+  - job: notificar_port
+    displayName: "Enviar ${{ parameters.status }} a Port"
+    pool:
+      name: Default
+    steps:
+      - bash: |
+          set -e
+
+          echo "🔑 Obteniendo token de Port..."
+          AUTH_RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"clientId\": \"$(PORT_CLIENT_ID)\", \"clientSecret\": \"$(PORT_CLIENT_SECRET)\"}" \
+            "https://api.getport.io/v1/auth/access_token")
+
+          TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
+          echo "✅ Token de Port obtenido"
+
+          curl -s -X PATCH \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -d "{\"status\": \"${{ parameters.status }}\", \"message\": {\"run_status\": \"${{ parameters.message }}\"}}" \
+            "https://api.getport.io/v1/actions/runs/$(RUN_ID)"
+
+          echo "✅ Port notificado: ${{ parameters.status }}"
+        displayName: "PATCH run → ${{ parameters.status }}"

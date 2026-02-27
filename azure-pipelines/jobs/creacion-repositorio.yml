@@ -1,0 +1,63 @@
+jobs:
+  - job: CreacionRepositorio
+    displayName: "Job 2 · Creación del repositorio en GitHub"
+    pool:
+      name: Default
+    dependsOn: Validacion
+    variables:
+      templateRepo: $[ dependencies.Validacion.outputs['SeleccionTemplate.templateRepo'] ]
+      repoCreado: "false"
+    steps:
+      - bash: |
+          set -e
+
+          IS_PRIVATE=true
+          if [ "$(REPO_VISIBILITY)" = "public" ]; then IS_PRIVATE=false; fi
+
+          echo "📦 Creando repositorio '$(NEW_REPO_NAME)' (privado: $IS_PRIVATE)..."
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $(GITHUB_TOKEN)" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"$(NEW_REPO_NAME)\", \"private\": $IS_PRIVATE, \"auto_init\": true}" \
+            "https://api.github.com/user/repos")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "❌ Error al crear repositorio (HTTP $HTTP_CODE): $BODY"
+            exit 1
+          fi
+
+          CLONE_URL=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['clone_url'])")
+          FULL_NAME=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['full_name'])")
+
+          echo "##vso[task.setvariable variable=newRepoUrl;isOutput=true]$CLONE_URL"
+          echo "##vso[task.setvariable variable=newRepoFullName;isOutput=true]$FULL_NAME"
+          echo "##vso[task.setvariable variable=repoCreado]true"
+          echo "✅ Repositorio creado: $FULL_NAME"
+        displayName: "Crear repositorio en GitHub"
+        name: CrearRepo
+
+      - bash: |
+          echo "⚠️ Fallo al crear el repositorio. Iniciando rollback..."
+          if [ "$(repoCreado)" = "true" ]; then
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X DELETE \
+              -H "Authorization: Bearer $(GITHUB_TOKEN)" \
+              "https://api.github.com/repos/$(CrearRepo.newRepoFullName)")
+
+            if [ "$HTTP_CODE" = "204" ]; then
+              echo "✅ Repositorio eliminado en rollback"
+            else
+              echo "##vso[task.logissue type=warning]No se pudo eliminar el repositorio en rollback (HTTP $HTTP_CODE)"
+            fi
+          else
+            echo "ℹ️ El repositorio no llegó a crearse, no hay rollback necesario."
+          fi
+          exit 1
+        condition: failed()
+        displayName: "Rollback — eliminar repo si hubo error"
