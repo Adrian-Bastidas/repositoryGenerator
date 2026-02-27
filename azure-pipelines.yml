@@ -56,7 +56,7 @@ stages:
               echo "🔍 Verificando git..."
               if ! command -v git &> /dev/null; then
                 echo "git no encontrado, instalando..."
-                sudo apt-get update -qq && sudo apt-get install -y git
+                apt-get update -qq && apt-get install -y git
               fi
               echo "✅ git: $(git --version)"
 
@@ -76,8 +76,8 @@ stages:
 
               if [ -z "$PYTHON_EXE" ]; then
                 echo "⚙️ Python no encontrado. Instalando Python 3.11..."
-                sudo apt-get update -qq
-                sudo apt-get install -y python3.11 python3.11-venv python3-pip
+                apt-get update -qq
+                apt-get install -y python3.11 python3.11-venv python3-pip
                 PYTHON_EXE=$(command -v python3.11)
                 echo "✅ Python instalado: $($PYTHON_EXE --version)"
               fi
@@ -93,7 +93,7 @@ stages:
               echo "🔍 Verificando pip con: $PYTHON_EXE"
               if ! $PYTHON_EXE -m pip --version &> /dev/null; then
                 echo "pip no disponible, instalando..."
-                sudo apt-get install -y python3-pip
+                apt-get install -y python3-pip
               fi
               echo "✅ pip: $($PYTHON_EXE -m pip --version)"
 
@@ -244,11 +244,9 @@ stages:
 
               mkdir -p "$CC_TEMPLATE_DIR/{{cookiecutter.project_name}}"
 
-              # Copiar archivos del template (sin .git)
               find "$TEMPLATE_CLONE_DIR" -mindepth 1 -maxdepth 1 ! -name '.git' \
                 -exec cp -r {} "$CC_TEMPLATE_DIR/{{cookiecutter.project_name}}/" \;
 
-              # Escribir cookiecutter.json
               echo "{\"project_name\": \"$(PROJECT_NAME)\"}" > "$CC_TEMPLATE_DIR/cookiecutter.json"
 
               echo "🍪 Ejecutando Cookiecutter..."
@@ -371,7 +369,7 @@ stages:
                   -H "Content-Type: application/json" \
                   -d "$BODY" \
                   "https://api.github.com/repos/$(newRepoFullName)/rulesets")
-                return $([ "$HTTP_CODE" = "201" ] && echo 0 || echo 1)
+                [ "$HTTP_CODE" = "201" ]
               }
 
               protect_with_branch_protection() {
@@ -398,7 +396,7 @@ stages:
                   -H "Content-Type: application/json" \
                   -d "$BODY" \
                   "https://api.github.com/repos/$(newRepoFullName)/branches/$BRANCH/protection")
-                return $([ "$HTTP_CODE" = "200" ] && echo 0 || echo 1)
+                [ "$HTTP_CODE" = "200" ]
               }
 
               protect_branch() {
