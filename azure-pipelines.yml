@@ -5,60 +5,23 @@ resources:
     - webhook: port_trigger
       connection: port_trigger
 
-parameters:
-  - name: repoTemplate
-    displayName: "Selecciona el repositorio template"
-    type: string
-    default: springboot
-    values:
-      - springboot
-      - react
-      - angular
-      - node
-
-  - name: newRepoName
-    displayName: "Nombre del nuevo repositorio (ej: mi-proyecto-api)"
-    type: string
-    default: "mi-nuevo-repo"
-
-  - name: projectName
-    displayName: "Nombre del proyecto (ej: MiProyectoApi) — se reemplaza en el código"
-    type: string
-    default: "MiProyecto"
-
-  - name: repoVisibility
-    displayName: "Visibilidad del repositorio"
-    type: string
-    default: private
-    values:
-      - public
-      - private
-
 variables:
   - group: github-secrets
 
-  # ===============================
-  # 🔗 Valores EFECTIVOS del pipeline
-  # Prioridad:
-  # 1️⃣ Port (webhook)
-  # 2️⃣ Ejecución manual (parameters)
-  # ===============================
-
   - name: REPO_TEMPLATE
-    value: ${{ coalesce(parameters.port_trigger.properties.repoTemplate, parameters.repoTemplate) }}
+    value: ${{ parameters.port_trigger.properties.repoTemplate }}
 
   - name: NEW_REPO_NAME
-    value: ${{ coalesce(parameters.port_trigger.properties.newRepoName, parameters.newRepoName) }}
+    value: ${{ parameters.port_trigger.properties.newRepoName }}
 
   - name: PROJECT_NAME
-    value: ${{ coalesce(parameters.port_trigger.properties.projectName,parameters.projectName) }}
+    value: ${{ parameters.port_trigger.properties.projectName }}
 
   - name: REPO_VISIBILITY
-    value: ${{ coalesce(parameters.port_trigger.properties.repoVisibility,parameters.repoVisibility) }}
+    value: ${{ parameters.port_trigger.properties.repoVisibility }}
 
-  # ===============================
-  # Templates disponibles
-  # ===============================
+  - name: RUN_ID
+    value: ${{ parameters.port_trigger.port_context.runId }}
 
   - name: springbootRepo
     value: "Adrian-Bastidas/AqrGSprinboot"
@@ -71,36 +34,10 @@ variables:
 
   - name: nodeRepo
     value: "Adrian-Bastidas/ArqGNode"
+
 jobs:
-  - job: DiagnosticoPayload
-    displayName: "DEBUG · Ver qué llega del webhook"
-    pool:
-      name: Default
-    steps:
-      - powershell: |
-          Write-Host "======== VARIABLES DE ENTORNO ========"
-          Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
-            Write-Host "$($_.Name) = $($_.Value)"
-          }
-
-          Write-Host "======== PARAMETERS port_trigger ========"
-          Write-Host "repoTemplate  : ${{ parameters.port_trigger.properties.repoTemplate }}"
-          Write-Host "newRepoName   : ${{ parameters.port_trigger.properties.newRepoName }}"
-          Write-Host "projectName   : ${{ parameters.port_trigger.properties.projectName }}"
-          Write-Host "repoVisibility: ${{ parameters.port_trigger.properties.repoVisibility }}"
-          Write-Host "runId         : ${{ parameters.port_trigger.port_context.runId }}"
-
-          Write-Host "======== VARIABLES RESUELTAS ========"
-          Write-Host "REPO_TEMPLATE  : $(REPO_TEMPLATE)"
-          Write-Host "NEW_REPO_NAME  : $(NEW_REPO_NAME)"
-          Write-Host "PROJECT_NAME   : $(PROJECT_NAME)"
-          Write-Host "REPO_VISIBILITY: $(REPO_VISIBILITY)"
-        displayName: "Imprimir todo lo disponible"
   # ==============================================================
   # JOB 0 — Prerequisitos
-  # Verifica e instala todo lo necesario en el agente Windows
-  # antes de que arranque cualquier otro job.
-  # Herramientas: Python, pip, Cookiecutter, git
   # ==============================================================
   - job: Prerequisitos
     displayName: "Job 0 · Prerequisitos — instalar herramientas"
@@ -110,16 +47,12 @@ jobs:
       - powershell: |
           $ErrorActionPreference = "Stop"
 
-          # ── Git ───────────────────────────────────────────────────
           Write-Host "🔍 Verificando git..."
           $gitPath = Get-Command git -ErrorAction SilentlyContinue
-          if (-not $gitPath) { throw "git no está instalado o no está en el PATH. Instálalo desde https://git-scm.com" }
+          if (-not $gitPath) { throw "git no está instalado o no está en el PATH." }
           Write-Host "✅ git: $(git --version)"
 
-          # ── Python ───────────────────────────────────────────────
           Write-Host "🔍 Buscando Python en el sistema..."
-
-          # Rutas donde puede estar Python en Windows (PATH + instalaciones típicas)
           $pythonCandidates = @(
             "C:\Python311\python.exe",
             "C:\Python312\python.exe",
@@ -136,7 +69,6 @@ jobs:
 
           $pythonExe = $null
 
-          # Probar rutas absolutas primero (evita el stub de Microsoft Store)
           foreach ($candidate in $pythonCandidates) {
             if (Test-Path $candidate) {
               $ver = & $candidate --version 2>&1
@@ -148,11 +80,9 @@ jobs:
             }
           }
 
-          # Si no se encontró en rutas absolutas, buscar en PATH ignorando stubs
           if (-not $pythonExe) {
             $fromPath = Get-Command python -ErrorAction SilentlyContinue
             if ($fromPath) {
-              # Filtrar el stub de Microsoft Store (WindowsApps)
               if ($fromPath.Source -notmatch "WindowsApps") {
                 $ver = & $fromPath.Source --version 2>&1
                 if ($LASTEXITCODE -eq 0 -and "$ver" -match "Python 3") {
@@ -165,37 +95,27 @@ jobs:
             }
           }
 
-          # Si sigue sin encontrarse, descargar e instalar desde python.org
           if (-not $pythonExe) {
-            Write-Host "⚙️ Python no encontrado. Descargando Python 3.11 desde python.org..."
+            Write-Host "⚙️ Python no encontrado. Descargando Python 3.11..."
+            $installer   = "$env:TEMP\python-installer.exe"
+            $installDir  = "C:\Python311"
+            $downloadUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
 
-            $installer    = "$env:TEMP\python-installer.exe"
-            $installDir   = "C:\Python311"
-            $downloadUrl  = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
-
-            Write-Host "⬇️ Descargando: $downloadUrl"
             Invoke-WebRequest -Uri $downloadUrl -OutFile $installer -UseBasicParsing
             if (-not (Test-Path $installer)) { throw "No se pudo descargar el instalador de Python" }
 
-            Write-Host "📦 Instalando Python en $installDir ..."
             Start-Process -FilePath $installer -ArgumentList @(
-              "/quiet",
-              "InstallAllUsers=0",
-              "TargetDir=$installDir",
-              "PrependPath=0",       # No tocar el PATH global para no romper el agente
-              "Include_pip=1",
-              "Include_launcher=0"
+              "/quiet", "InstallAllUsers=0", "TargetDir=$installDir",
+              "PrependPath=0", "Include_pip=1", "Include_launcher=0"
             ) -Wait -NoNewWindow
 
             if (-not (Test-Path "$installDir\python.exe")) {
-              throw "La instalación de Python falló. No se encontró $installDir\python.exe"
+              throw "La instalación de Python falló."
             }
 
             $pythonExe = "$installDir\python.exe"
             $ver = & $pythonExe --version 2>&1
-            Write-Host "✅ Python instalado correctamente: $ver"
-
-            # Limpiar instalador
+            Write-Host "✅ Python instalado: $ver"
             Remove-Item $installer -Force -ErrorAction SilentlyContinue
           }
 
@@ -216,7 +136,6 @@ jobs:
           & $pythonExe -m pip install --upgrade cookiecutter --quiet
           if ($LASTEXITCODE -ne 0) { throw "Error instalando Cookiecutter" }
 
-          # Verificar instalación
           $ccVer = & $pythonExe -m cookiecutter --version 2>&1
           Write-Host "✅ Cookiecutter listo: $ccVer"
 
@@ -236,26 +155,27 @@ jobs:
       - powershell: |
           $ErrorActionPreference = "Stop"
 
-          $repoName = "${{ parameters.newRepoName }}"
+          $repoName = "$(NEW_REPO_NAME)"
           if ([string]::IsNullOrWhiteSpace($repoName)) { throw "Nombre de repositorio vacío" }
           if ($repoName.Length -gt 100)                { throw "Nombre de repositorio demasiado largo (máx 100 caracteres)" }
-          if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') { throw "Nombre de repositorio con caracteres inválidos. Usa solo letras, números, punto, guion o guion bajo" }
+          if ($repoName -notmatch '^[a-zA-Z0-9._-]+$') { throw "Nombre de repositorio con caracteres inválidos." }
           Write-Host "✅ Nombre de repositorio válido: $repoName"
 
-          $projectName = "${{ parameters.projectName }}"
+          $projectName = "$(PROJECT_NAME)"
           if ([string]::IsNullOrWhiteSpace($projectName)) { throw "Nombre de proyecto vacío" }
           if ($projectName.Length -gt 100)               { throw "Nombre de proyecto demasiado largo (máx 100 caracteres)" }
           Write-Host "✅ Nombre de proyecto válido: $projectName"
         displayName: "Validar parámetros de entrada"
 
       - powershell: |
-          switch ("${{ parameters.repoTemplate }}") {
+          switch ("$(REPO_TEMPLATE)") {
             "springboot" { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(springbootRepo)" }
             "react"      { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(reactRepo)" }
             "angular"    { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(angularRepo)" }
             "node"       { Write-Host "##vso[task.setvariable variable=templateRepo;isOutput=true]$(nodeRepo)" }
+            default      { throw "Template no reconocido: $(REPO_TEMPLATE)" }
           }
-          Write-Host "✅ Template seleccionado: ${{ parameters.repoTemplate }}"
+          Write-Host "✅ Template seleccionado: $(REPO_TEMPLATE)"
         displayName: "Seleccionar template"
         name: SeleccionTemplate
 
@@ -278,15 +198,15 @@ jobs:
             Accept        = "application/vnd.github+json"
           }
 
-          $isPrivate = ("${{ parameters.repoVisibility }}" -eq "private")
+          $isPrivate = ("$(REPO_VISIBILITY)" -eq "private")
 
           $body = @{
-            name      = "${{ parameters.newRepoName }}"
+            name      = "$(NEW_REPO_NAME)"
             private   = $isPrivate
             auto_init = $true
           } | ConvertTo-Json
 
-          Write-Host "📦 Creando repositorio '${{ parameters.newRepoName }}' (privado: $isPrivate)..."
+          Write-Host "📦 Creando repositorio '$(NEW_REPO_NAME)' (privado: $isPrivate)..."
 
           try {
             $repo = Invoke-RestMethod `
@@ -345,7 +265,7 @@ jobs:
       newRepoFullName: $[ dependencies.CreacionRepositorio.outputs['CrearRepo.newRepoFullName'] ]
     steps:
       - checkout: self
-        displayName: "Checkout del repo del pipeline (contiene cookiecutter.json)"
+        displayName: "Checkout del repo del pipeline"
 
       - powershell: |
           $ErrorActionPreference = "Stop"
@@ -356,37 +276,27 @@ jobs:
           $ccTemplateDir    = "$(Agent.TempDirectory)/cc-template"
           $outputDir        = "$(Agent.TempDirectory)/cookiecutter-output"
 
-          # ── 1. Clonar el template raw ─────────────────────────────
           Write-Host "📥 Clonando template: $(templateRepo)"
           git clone "https://$token@github.com/$(templateRepo).git" $templateCloneDir
           if ($LASTEXITCODE -ne 0) { throw "Error al clonar el template" }
-
-          # ── 2. Construir estructura de Cookiecutter ───────────────
-          # Cookiecutter necesita:
-          #   cc-template/
-          #     cookiecutter.json
-          #     {{cookiecutter.project_name}}/   ← contenido del template aquí
 
           New-Item -ItemType Directory -Force -Path $ccTemplateDir | Out-Null
           $innerFolder = "$ccTemplateDir/{{cookiecutter.project_name}}"
           New-Item -ItemType Directory -Force -Path $innerFolder | Out-Null
 
-          # Copiar archivos del template (sin .git) a la carpeta interna
-          Get-ChildItem $templateCloneDir -Force | 
+          Get-ChildItem $templateCloneDir -Force |
               Where-Object { $_.Name -ne ".git" } |
               ForEach-Object {
                   Copy-Item $_.FullName -Destination $innerFolder -Recurse -Force
               }
 
-          # Escribir cookiecutter.json
-          $jsonContent = @{ project_name = "${{ parameters.projectName }}" } | ConvertTo-Json -Depth 5
+          $jsonContent = @{ project_name = "$(PROJECT_NAME)" } | ConvertTo-Json -Depth 5
           [System.IO.File]::WriteAllText(
               "$ccTemplateDir/cookiecutter.json",
               $jsonContent,
               (New-Object System.Text.UTF8Encoding($false))
           )
 
-          # ── 3. Ejecutar Cookiecutter ──────────────────────────────
           Write-Host "🍪 Ejecutando Cookiecutter..."
           New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
@@ -397,7 +307,6 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) { throw "Error ejecutando Cookiecutter" }
 
-          # ── 4. Localizar carpeta generada ────────────────────────
           $generatedFolder = Get-ChildItem $outputDir -Directory | Select-Object -First 1
           if (-not $generatedFolder) { throw "Cookiecutter no generó ninguna carpeta de salida" }
 
@@ -412,7 +321,6 @@ jobs:
           $cloneUrl      = "https://$token@github.com/$(newRepoFullName).git"
           $generatedPath = "$(AplicarCookiecutter.generatedPath)"
 
-          Write-Host "🔧 Preparando repositorio git en el código generado..."
           Set-Location $generatedPath
 
           git init
@@ -423,12 +331,12 @@ jobs:
           Write-Host "🌿 Subiendo rama main..."
           git checkout -B main
           git add .
-          git commit -m "feat: initial project structure from ${{ parameters.repoTemplate }} template
+          git commit -m "feat: initial project structure from $(REPO_TEMPLATE) template
 
           Generated by Azure Pipeline
-          - Template  : ${{ parameters.repoTemplate }}
-          - Project   : ${{ parameters.projectName }}
-          - Repo      : ${{ parameters.newRepoName }}"
+          - Template  : $(REPO_TEMPLATE)
+          - Project   : $(PROJECT_NAME)
+          - Repo      : $(NEW_REPO_NAME)"
 
           git push origin main --force
           if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de main" }
@@ -438,8 +346,7 @@ jobs:
           git push origin develop
           if ($LASTEXITCODE -ne 0) { throw "Error al hacer push de develop" }
 
-          Write-Host "✅ Ramas main y develop subidas con código generado"
-
+          Write-Host "✅ Ramas main y develop subidas"
           Write-Host "⏳ Esperando 8 segundos para que GitHub indexe las ramas..."
           Start-Sleep -Seconds 8
         displayName: "Subir código generado al nuevo repositorio"
@@ -509,10 +416,8 @@ jobs:
 
             Invoke-RestMethod `
               -Uri "https://api.github.com/repos/$(newRepoFullName)/rulesets" `
-              -Method POST `
-              -Headers $headers `
-              -Body $body `
-              -ContentType "application/json" | Out-Null
+              -Method POST -Headers $headers `
+              -Body $body -ContentType "application/json" | Out-Null
           }
 
           function Protect-WithBranchProtection {
@@ -532,10 +437,8 @@ jobs:
 
             Invoke-RestMethod `
               -Uri "https://api.github.com/repos/$(newRepoFullName)/branches/$branchName/protection" `
-              -Method PUT `
-              -Headers $headers `
-              -Body $body `
-              -ContentType "application/json" | Out-Null
+              -Method PUT -Headers $headers `
+              -Body $body -ContentType "application/json" | Out-Null
           }
 
           function Protect-Branch {
@@ -549,7 +452,7 @@ jobs:
             }
             catch {
               $code = $_.Exception.Response.StatusCode.value__
-              Write-Host "⚠️  Rulesets falló en '$branchName' (HTTP $code) → intentando Branch Protection legacy..."
+              Write-Host "⚠️ Rulesets falló en '$branchName' (HTTP $code) → intentando Branch Protection legacy..."
             }
 
             try {
@@ -560,7 +463,6 @@ jobs:
             catch {
               $code = $_.Exception.Response.StatusCode.value__
               Write-Host "##vso[task.logissue type=warning]No se pudo proteger '$branchName' con ningún método (HTTP $code)."
-              Write-Host "##vso[task.logissue type=warning]Causa probable: repo privado en cuenta GitHub Free no soporta protección de ramas vía API."
               Write-Host "##vso[task.logissue type=warning]Aplica la protección manualmente desde GitHub → Settings → Branches."
             }
           }
@@ -577,6 +479,7 @@ jobs:
     displayName: "Job 5 · Resumen final"
     pool:
       name: Default
+    # ✅ Correcto (igual que el original)
     dependsOn:
       - AplicarTemplateYSubirCodigo
       - ProteccionRamas
@@ -588,12 +491,11 @@ jobs:
       - powershell: |
           Write-Host "========================================"
           Write-Host "✅ Repositorio creado y configurado"
-          Write-Host "📦 Template    : ${{ parameters.repoTemplate }}"
-          Write-Host "📛 Proyecto    : ${{ parameters.projectName }}"
-          Write-Host "🗂️  Repositorio : ${{ parameters.newRepoName }}"
-          Write-Host "🔒 Visibilidad : ${{ parameters.repoVisibility }}"
+          Write-Host "📦 Template    : $(REPO_TEMPLATE)"
+          Write-Host "📛 Proyecto    : $(PROJECT_NAME)"
+          Write-Host "🗂️  Repositorio : $(NEW_REPO_NAME)"
+          Write-Host "🔒 Visibilidad : $(REPO_VISIBILITY)"
           Write-Host "🌿 Ramas       : main, develop"
           Write-Host "🛡️ Protección  : ver logs del Job 4"
-          Write-Host "🔗 URL         : $(newRepoUrl)"
           Write-Host "========================================"
         displayName: "Mostrar resumen"
