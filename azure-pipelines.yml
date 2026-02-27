@@ -519,22 +519,36 @@ stages:
           name: Default
         steps:
           - powershell: |
-              $runId = "$(RUN_ID)"
-              $token = "$(accessToken)"
+              # 1. Obtener token fresco de Port
+              $authBody = @{
+                clientId     = "$(PORT_CLIENT_ID)"
+                clientSecret = "$(PORT_CLIENT_SECRET)"
+              } | ConvertTo-Json
 
+              $authResponse = Invoke-RestMethod `
+                -Uri "https://api.getport.io/v1/auth/access_token" `
+                -Method POST `
+                -Body $authBody `
+                -ContentType "application/json"
+
+              $token = $authResponse.accessToken
+              Write-Host "✅ Token de Port obtenido"
+
+              # 2. Notificar éxito
               $body = @{
                 status  = "SUCCESS"
                 message = @{ run_status = "Pipeline completed successfully!" }
               } | ConvertTo-Json
 
               Invoke-RestMethod `
-                -Uri "https://api.getport.io/v1/actions/runs/$runId" `
+                -Uri "https://api.getport.io/v1/actions/runs/$(RUN_ID)" `
                 -Method PATCH `
                 -Headers @{
                   "Content-Type"  = "application/json"
                   "Authorization" = "Bearer $token"
                 } `
                 -Body $body
+
               Write-Host "✅ Port notificado: SUCCESS"
             displayName: "PATCH run → SUCCESS"
 
@@ -552,21 +566,35 @@ stages:
           name: Default
         steps:
           - powershell: |
-              $runId = "$(RUN_ID)"
-              $token = "$(accessToken)"
+              # 1. Obtener token fresco de Port
+              $authBody = @{
+                clientId     = "$(PORT_CLIENT_ID)"
+                clientSecret = "$(PORT_CLIENT_SECRET)"
+              } | ConvertTo-Json
 
+              $authResponse = Invoke-RestMethod `
+                -Uri "https://api.getport.io/v1/auth/access_token" `
+                -Method POST `
+                -Body $authBody `
+                -ContentType "application/json"
+
+              $token = $authResponse.accessToken
+              Write-Host "✅ Token de Port obtenido"
+
+              # 2. Notificar fallo
               $body = @{
                 status  = "FAILURE"
                 message = @{ run_status = "Pipeline failed!" }
               } | ConvertTo-Json
 
               Invoke-RestMethod `
-                -Uri "https://api.getport.io/v1/actions/runs/$runId" `
+                -Uri "https://api.getport.io/v1/actions/runs/$(RUN_ID)" `
                 -Method PATCH `
                 -Headers @{
                   "Content-Type"  = "application/json"
                   "Authorization" = "Bearer $token"
                 } `
                 -Body $body
+
               Write-Host "✅ Port notificado: FAILURE"
             displayName: "PATCH run → FAILURE"
