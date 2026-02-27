@@ -1,5 +1,10 @@
 trigger: none
 
+resources:
+  webhooks:
+    - webhook: port_trigger
+      connection: port_trigger
+
 parameters:
   - name: repoTemplate
     displayName: "Selecciona el repositorio template"
