@@ -36,15 +36,53 @@ parameters:
 
 variables:
   - group: github-secrets
+
+  # ===============================
+  # 🔗 Valores EFECTIVOS del pipeline
+  # Prioridad:
+  # 1️⃣ Port (webhook)
+  # 2️⃣ Ejecución manual (parameters)
+  # ===============================
+
+  - name: REPO_TEMPLATE
+    value: ${{ coalesce(
+      parameters.port_trigger.properties.repoTemplate,
+      parameters.repoTemplate
+    ) }}
+
+  - name: NEW_REPO_NAME
+    value: ${{ coalesce(
+      parameters.port_trigger.properties.newRepoName,
+      parameters.newRepoName
+    ) }}
+
+  - name: PROJECT_NAME
+    value: ${{ coalesce(
+      parameters.port_trigger.properties.projectName,
+      parameters.projectName
+    ) }}
+
+  - name: REPO_VISIBILITY
+    value: ${{ coalesce(
+      parameters.port_trigger.properties.repoVisibility,
+      parameters.repoVisibility
+    ) }}
+
+  # ===============================
+  # Templates disponibles
+  # ===============================
+
   - name: springbootRepo
     value: "Adrian-Bastidas/AqrGSprinboot"
+
   - name: reactRepo
     value: "Adrian-Bastidas/ArqGReact"
+
   - name: angularRepo
     value: "Adrian-Bastidas/ArqGAngular"
+
   - name: nodeRepo
     value: "Adrian-Bastidas/ArqGNode"
-
 jobs:
   # ==============================================================
   # JOB 0 — Prerequisitos
