@@ -5,8 +5,9 @@ jobs:
       name: Default
     steps:
       - bash: |
-          echo "============================================"
-          echo "   TODAS LAS VARIABLES DE ENTORNO"
-          echo "============================================"
-          env | sort
+          echo "newRepoName   : ${{ parameters.port_trigger.properties.newRepoName }}"
+          echo "projectName   : ${{ parameters.port_trigger.properties.projectName }}"
+          echo "repoTemplate  : ${{ parameters.port_trigger.properties.repoTemplate }}"
+          echo "repoVisibility: ${{ parameters.port_trigger.properties.repoVisibility }}"
+          echo "runId         : ${{ parameters.port_trigger.port_context.runId }}"
         displayName: "Imprimir todos los parámetros recibidos"
