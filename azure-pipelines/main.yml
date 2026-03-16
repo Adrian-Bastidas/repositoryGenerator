@@ -8,16 +8,6 @@ resources:
 variables:
   - template: variables/variables.yml
   - group: github-secrets
-  - name: newRepoName
-    value: $[ resources.triggerBody().properties.newRepoName ]
-  - name: projectName
-    value: $[ resources.triggerBody().properties.projectName ]
-  - name: repoTemplate
-    value: $[ resources.triggerBody().properties.repoTemplate ]
-  - name: repoVisibility
-    value: $[ resources.triggerBody().properties.repoVisibility ]
-  - name: portRunId
-    value: $[ resources.triggerBody().port_context.runId ]
 
 stages:
   - stage: Pipeline
@@ -27,20 +17,20 @@ stages:
 
       - template: jobs/validacion.yml
         parameters:
-          newRepoName: $(newRepoName)
-          projectName: $(projectName)
-          repoTemplate: $(repoTemplate)
+          newRepoName: ${{ parameters.port_trigger.properties.newRepoName }}
+          projectName: ${{ parameters.port_trigger.properties.projectName }}
+          repoTemplate: ${{ parameters.port_trigger.properties.repoTemplate }}
 
       - template: jobs/creacion-repositorio.yml
         parameters:
-          newRepoName: $(newRepoName)
-          repoVisibility: $(repoVisibility)
+          newRepoName: ${{ parameters.port_trigger.properties.newRepoName }}
+          repoVisibility: ${{ parameters.port_trigger.properties.repoVisibility }}
 
       - template: jobs/aplicar-template.yml
         parameters:
-          projectName: $(projectName)
-          repoTemplate: $(repoTemplate)
-          newRepoName: $(newRepoName)
+          projectName: ${{ parameters.port_trigger.properties.projectName }}
+          repoTemplate: ${{ parameters.port_trigger.properties.repoTemplate }}
+          newRepoName: ${{ parameters.port_trigger.properties.newRepoName }}
 
       - template: jobs/proteccion-ramas.yml
       - template: jobs/resumen-final.yml
@@ -54,7 +44,7 @@ stages:
         parameters:
           status: "SUCCESS"
           message: "Pipeline completed successfully!"
-          runId: $(portRunId)
+          runId: ${{ parameters.port_trigger.port_context.runId }}
 
   - stage: update_run_failed
     displayName: "Notificar fallo a Port"
@@ -65,4 +55,4 @@ stages:
         parameters:
           status: "FAILURE"
           message: "Pipeline failed!"
-          runId: $(portRunId)
+          runId: ${{ parameters.port_trigger.port_context.runId }}
