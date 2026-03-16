@@ -6,17 +6,12 @@ jobs:
     steps:
       - bash: |
           echo "============================================"
-          echo "   PAYLOAD COMPLETO RECIBIDO DESDE PORT"
+          echo "   TODAS LAS VARIABLES DE ENTORNO"
           echo "============================================"
-          echo ""
-          echo "--- PROPERTIES ---"
-          echo "newRepoName   : ${{ parameters.port_trigger.properties.newRepoName }}"
-          echo "projectName   : ${{ parameters.port_trigger.properties.projectName }}"
-          echo "repoTemplate  : ${{ parameters.port_trigger.properties.repoTemplate }}"
-          echo "repoVisibility: ${{ parameters.port_trigger.properties.repoVisibility }}"
-          echo ""
-          echo "--- PORT CONTEXT ---"
-          echo "runId: ${{ parameters.port_trigger.port_context.runId }}"
+          env | sort
           echo ""
           echo "============================================"
+          echo "   VARIABLES QUE CONTENGAN 'PORT' O 'WEBHOOK'"
+          echo "============================================"
+          env | grep -i -E "port|webhook|trigger" || echo "Ninguna encontrada"
         displayName: "Imprimir todos los parámetros recibidos"
