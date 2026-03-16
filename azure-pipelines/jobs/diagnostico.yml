@@ -11,7 +11,25 @@ jobs:
           env | sort
           echo ""
           echo "============================================"
-          echo "   VARIABLES QUE CONTENGAN 'PORT' O 'WEBHOOK'"
+          echo "   ARCHIVOS EN EL WORKSPACE"
           echo "============================================"
-          env | grep -i -E "port|webhook|trigger" || echo "Ninguna encontrada"
+          find /azp/_work -type f 2>/dev/null | head -50
+          echo ""
+          echo "============================================"
+          echo "   CONTENIDO DE ARCHIVOS JSON/TEMP"
+          echo "============================================"
+          find /azp/_work -name "*.json" -type f 2>/dev/null | while read f; do
+            echo "--- $f ---"
+            cat "$f"
+            echo ""
+          done
+          echo ""
+          echo "============================================"
+          echo "   ARCHIVOS TEMP"
+          echo "============================================"
+          find /azp/_work/_temp -type f 2>/dev/null | while read f; do
+            echo "--- $f ---"
+            cat "$f"
+            echo ""
+          done
         displayName: "Imprimir todos los parámetros recibidos"
