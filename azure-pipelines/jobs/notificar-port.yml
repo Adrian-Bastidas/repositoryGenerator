@@ -20,7 +20,7 @@ jobs:
 
           AUTH_RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
-            -d "{\"clientId\": \"$PORT_CLIENT_ID\", \"clientSecret\": \"$PORT_CLIENT_SECRET\"}" \
+            -d "{\"clientId\": \"$(PORT_CLIENT_ID)\", \"clientSecret\": \"$(PORT_CLIENT_SECRET)\"}" \
             "https://api.getport.io/v1/auth/access_token")
 
           echo "Respuesta auth:"
