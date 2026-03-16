@@ -11,24 +11,40 @@ jobs:
     displayName: "Enviar ${{ parameters.status }} a Port"
     pool:
       name: Default
+
     steps:
       - bash: |
           set -e
 
           echo "🔑 Obteniendo token de Port..."
+
           AUTH_RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d "{\"clientId\": \"$(PORT_CLIENT_ID)\", \"clientSecret\": \"$(PORT_CLIENT_SECRET)\"}" \
             "https://api.getport.io/v1/auth/access_token")
 
-          TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
-          echo "✅ Token de Port obtenido"
+          echo "Respuesta auth:"
+          echo "$AUTH_RESPONSE"
 
-          curl -s -X PATCH \
+          TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('accessToken',''))")
+
+          if [ -z "$TOKEN" ]; then
+            echo "❌ No se pudo obtener accessToken de Port"
+            exit 1
+          fi
+
+          echo "✅ Token obtenido"
+
+          echo "📡 Enviando actualización a Port..."
+
+          RESPONSE=$(curl -s -X PATCH \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $TOKEN" \
-            -d "{\"status\": \"${{ parameters.status }}\", \"message\": {\"run_status\": \"${{ parameters.message }}\"}}" \
-            "https://api.getport.io/v1/actions/runs/${{ parameters.runId }}"
+            -d "{\"status\": \"${{ parameters.status }}\", \"message\": \"${{ parameters.message }}\"}" \
+            "https://api.getport.io/v1/actions/runs/${{ parameters.runId }}")
 
-          echo "✅ Port notificado: ${{ parameters.status }}"
+          echo "Respuesta de Port:"
+          echo "$RESPONSE"
+
+          echo "✅ Port notificado correctamente"
         displayName: "PATCH run → ${{ parameters.status }}"
