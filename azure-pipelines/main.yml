@@ -10,8 +10,34 @@ variables:
   - group: github-secrets
 
 stages:
+  - stage: Diagnostico
+    displayName: "Diagnóstico - Payload recibido desde Port"
+    jobs:
+      - job: inspecionar_payload
+        displayName: "Inspeccionar payload de Port"
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - script: |
+              echo "============================================"
+              echo "   PAYLOAD COMPLETO RECIBIDO DESDE PORT"
+              echo "============================================"
+              echo ""
+              echo "--- PROPERTIES ---"
+              echo "newRepoName   : ${{ parameters.port_trigger.properties.newRepoName }}"
+              echo "projectName   : ${{ parameters.port_trigger.properties.projectName }}"
+              echo "repoTemplate  : ${{ parameters.port_trigger.properties.repoTemplate }}"
+              echo "repoVisibility: ${{ parameters.port_trigger.properties.repoVisibility }}"
+              echo ""
+              echo "--- PORT CONTEXT ---"
+              echo "runId: ${{ parameters.port_trigger.port_context.runId }}"
+              echo ""
+              echo "============================================"
+            displayName: "Imprimir todos los parámetros recibidos"
+
   - stage: Pipeline
     displayName: "Creación de repositorio"
+    dependsOn: Diagnostico
     jobs:
       - template: jobs/prerequisitos.yml
 
