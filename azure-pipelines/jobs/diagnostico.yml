@@ -1,21 +1,11 @@
 jobs:
   - job: Diagnostico
-    displayName: "Job 0 · Diagnóstico - Payload recibido desde Port"
     pool:
       name: Default
-
     steps:
       - bash: |
-          echo "===== VARIABLES RECIBIDAS DESDE PORT ====="
-
-          echo "newRepoName   : $RESOURCES_WEBHOOKS_PORT_TRIGGER_PROPERTIES_NEWREPONAME"
-          echo "projectName   : $RESOURCES_WEBHOOKS_PORT_TRIGGER_PROPERTIES_PROJECTNAME"
-          echo "repoTemplate  : $RESOURCES_WEBHOOKS_PORT_TRIGGER_PROPERTIES_REPOTEMPLATE"
-          echo "repoVisibility: $RESOURCES_WEBHOOKS_PORT_TRIGGER_PROPERTIES_REPOVISIBILITY"
-          echo "runId         : $RESOURCES_WEBHOOKS_PORT_TRIGGER_PORT_CONTEXT_RUNID"
-
-          echo ""
-          echo "===== DEBUG COMPLETO (todas las variables del entorno) ====="
-          env | sort
-
-        displayName: "Imprimir parámetros recibidos"
+          echo "newRepoName   : ${{ parameters.newRepoName }}"
+          echo "projectName   : ${{ parameters.projectName }}"
+          echo "repoTemplate  : ${{ parameters.repoTemplate }}"
+          echo "repoVisibility: ${{ parameters.repoVisibility }}"
+          echo "runId         : ${{ parameters.runId }}"
