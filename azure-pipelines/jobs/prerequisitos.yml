@@ -3,6 +3,7 @@ jobs:
     displayName: "Job 0 · Prerequisitos — instalar herramientas"
     pool:
       name: Default
+    dependsOn: Diagnostico
     steps:
       - bash: |
           set -e

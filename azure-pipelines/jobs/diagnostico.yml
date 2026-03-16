@@ -5,9 +5,9 @@ jobs:
       name: Default
     steps:
       - bash: |
-          echo "newRepoName   : ${{ parameters.port_trigger.properties.newRepoName }}"
-          echo "projectName   : ${{ parameters.port_trigger.properties.projectName }}"
-          echo "repoTemplate  : ${{ parameters.port_trigger.properties.repoTemplate }}"
-          echo "repoVisibility: ${{ parameters.port_trigger.properties.repoVisibility }}"
-          echo "runId         : ${{ parameters.port_trigger.port_context.runId }}"
+          echo "newRepoName   : $RESOURCES_WEBHOOKS_PORT_TRIGGER_PROPERTIES_NEWREPONAME"
+          echo "projectName   : $RESOURCES_WEBHOOKS_PORT_TRIGGER_PROPERTIES_PROJECTNAME"
+          echo "repoTemplate  : $RESOURCES_WEBHOOKS_PORT_TRIGGER_PROPERTIES_REPOTEMPLATE"
+          echo "repoVisibility: $RESOURCES_WEBHOOKS_PORT_TRIGGER_PROPERTIES_REPOVISIBILITY"
+          echo "runId         : $RESOURCES_WEBHOOKS_PORT_TRIGGER_PORT_CONTEXT_RUNID"
         displayName: "Imprimir todos los parámetros recibidos"
